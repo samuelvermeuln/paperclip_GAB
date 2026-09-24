@@ -42,9 +42,14 @@ services:
       DATABASE_URL: "postgres://${POSTGRES_USER:-paperclip}:${POSTGRES_PASSWORD:-paperclip}@postgres:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-paperclip}"
       PORT: "3100"
       SERVE_UI: "true"
-      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
-      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      PAPERCLIP_DEPLOYMENT_MODE: "${PAPERCLIP_DEPLOYMENT_MODE:-authenticated}"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "${PAPERCLIP_DEPLOYMENT_EXPOSURE:-private}"
       PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
+      # Extra hostnames the instance accepts beyond the public URL host
+      PAPERCLIP_ALLOWED_HOSTNAMES: "${PAPERCLIP_ALLOWED_HOSTNAMES:-}"
+      # Granular auth base URL overrides; leave unset to derive from PAPERCLIP_PUBLIC_URL
+      PAPERCLIP_AUTH_BASE_URL_MODE: "${PAPERCLIP_AUTH_BASE_URL_MODE:-}"
+      PAPERCLIP_AUTH_PUBLIC_BASE_URL: "${PAPERCLIP_AUTH_PUBLIC_BASE_URL:-}"
       BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set}"
     volumes:
       - paperclip-data:/paperclip

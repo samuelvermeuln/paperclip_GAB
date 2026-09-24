@@ -1,1 +1,12 @@
 patches/*.patch whitespace=-space-before-tab
+
+# The PRP protocol contract manifest (packages/paperclip-runner) is a
+# content-hash of every schema/fixture file plus its own generated JSON.
+# A CRLF/LF mismatch between the checkout platform and the platform that ran
+# the generator changes those hashes and makes `check:protocol-manifest`
+# falsely report "stale" even when no content actually changed. Force LF so
+# the hash is identical on every OS.
+packages/paperclip-runner/protocol/** text eol=lf
+packages/paperclip-runner/src/protocol/generated/** text eol=lf
+packages/paperclip-runner/src/drivers/acpx/generated-sidecar-contract.ts text eol=lf
+packages/paperclip-runner/runner/crates/runner-core/src/generated_acpx_sidecar_contract.rs text eol=lf

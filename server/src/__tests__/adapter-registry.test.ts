@@ -8,6 +8,7 @@ import {
   findActiveServerAdapter,
   findServerAdapter,
   listAdapterModels,
+  refreshAdapterModels,
   registerServerAdapter,
   requireServerAdapter,
   unregisterServerAdapter,
@@ -16,8 +17,17 @@ import {
   resolveExternalAdapterRegistration,
   setOverridePaused,
 } from "../adapters/registry.js";
+import { listCodexModels, refreshCodexModels, resetCodexModelsCacheForTests } from "../adapters/codex-models.js";
 
 vi.mock("@paperclipai/paperclip-runner/live", () => ({ probeAcpxClaudeInstallation: vi.fn(async () => undefined) }));
+
+const { listDatabricksModelServicesMock } = vi.hoisted(() => ({
+  listDatabricksModelServicesMock: vi.fn(),
+}));
+
+vi.mock("../services/databricks-model-services.js", () => ({
+  listDatabricksModelServices: listDatabricksModelServicesMock,
+}));
 
 const externalAdapter: ServerAdapterModule = {
   type: "external_test",
@@ -488,5 +498,75 @@ describe("resolveExternalAdapterRegistration", () => {
     const resolved = resolveExternalAdapterRegistration(adapter);
 
     expect(resolved.sessionManagement).toBeUndefined();
+  });
+});
+
+describe("codex_local registry wiring for Databricks model discovery", () => {
+  const DATABRICKS_MODELS = [
+    { id: "main.paperclip.combo_ux", label: "Combo Ux" },
+    { id: "main.paperclip.combo_dev", label: "Combo Dev" },
+  ];
+
+  const databricksContext = {
+    companyId: "company-1",
+    provider: "databricks" as const,
+    connectionId: "connection-1",
+    resolvedCredential: {
+      token: "dapi-test-token",
+      host: "https://acme.cloud.databricks.com",
+      catalog: "main",
+      schema: "paperclip",
+    },
+  };
+
+  beforeEach(() => {
+    resetCodexModelsCacheForTests();
+    listDatabricksModelServicesMock.mockReset();
+    listDatabricksModelServicesMock.mockResolvedValue(DATABRICKS_MODELS);
+  });
+
+  afterEach(() => {
+    listDatabricksModelServicesMock.mockReset();
+  });
+
+  it("wires the codex_local adapter module's listModels/refreshModels directly to listCodexModels/refreshCodexModels", () => {
+    const adapter = findActiveServerAdapter("codex_local");
+    expect(adapter).not.toBeNull();
+    expect(adapter!.listModels).toBe(listCodexModels);
+    expect(adapter!.refreshModels).toBe(refreshCodexModels);
+  });
+
+  it("listAdapterModels('codex_local', databricksContext) delegates through the adapter's listModels to the Databricks discovery path end-to-end", async () => {
+    const models = await listAdapterModels("codex_local", databricksContext);
+
+    expect(models).toEqual(DATABRICKS_MODELS);
+    expect(listDatabricksModelServicesMock).toHaveBeenCalledTimes(1);
+    expect(listDatabricksModelServicesMock).toHaveBeenCalledWith(
+      {
+        companyId: "company-1",
+        connectionId: "connection-1",
+        host: "https://acme.cloud.databricks.com",
+        catalog: "main",
+        schema: "paperclip",
+        modelPrefix: undefined,
+      },
+      databricksContext.resolvedCredential,
+      { refresh: undefined },
+    );
+  });
+
+  it("refreshAdapterModels('codex_local', databricksContext) delegates through the adapter's refreshModels to the Databricks discovery path with refresh=true", async () => {
+    const models = await refreshAdapterModels("codex_local", databricksContext);
+
+    expect(models).toEqual(DATABRICKS_MODELS);
+    expect(listDatabricksModelServicesMock).toHaveBeenCalledTimes(1);
+    const [, , options] = listDatabricksModelServicesMock.mock.calls[0]!;
+    expect(options).toEqual({ refresh: true });
+  });
+
+  it("listAdapterModels('codex_local') without a Databricks context never calls Databricks discovery", async () => {
+    await listAdapterModels("codex_local");
+
+    expect(listDatabricksModelServicesMock).not.toHaveBeenCalled();
   });
 });

@@ -4,6 +4,7 @@ import { prepareManagedAiRuntime, assertManagedAiProjectAuth, stripAiAuthBinding
 import { ADAPTER_AUTH_MISSING_CHECK_CODE, AI_CONNECTION_CAPABILITIES, aiConnectionBindingSchema, type AiConnectionBinding } from "@paperclipai/shared";
 import { toolConnections } from "@paperclipai/db";
 import { aiConnectionService } from "../services/ai-connections.js";
+import { DatabricksDiscoveryError } from "../services/databricks-model-services.js";
 import { defaultAiConnectionForHire } from "../services/agent-ai-connection-default.js";
 import { assertAiConnectionCreateAccess, canInstallSharedAiConnectionForNewAgent, responsibleUserForAiRequest, validateAiApiKey } from "./ai-connections.js";
 import { isAiConnectionCompatible } from "@paperclipai/shared";
@@ -80,7 +81,7 @@ import {
   syncInstructionsBundleConfigFromFilePath,
   workspaceOperationService,
 } from "../services/index.js";
-import { badRequest, conflict, forbidden, HttpError, notFound, unprocessable } from "../errors.js";
+import { badRequest, conflict, forbidden, HttpError, notFound, unauthorized, unprocessable } from "../errors.js";
 import { ONBOARDING_FIRST_TASK_SKILL_KEY, PAPERCLIP_CORE_SKILL_KEYS } from "../services/company-skills.js";
 import { createRunSecretRedactionRegistry } from "../services/run-secret-redaction.js";
 import { assertAuthenticated, assertBoard, assertCompanyAccess, assertInstanceAdmin, buildActorSecretContext, getAccessibleResource, getActorInfo, hasCompanyAccess } from "./authz.js";
@@ -99,6 +100,7 @@ import type { AdapterExecutionTarget } from "@paperclipai/adapter-utils/executio
 import type {
   AdapterEnvironmentCheck,
   AdapterEnvironmentTestResult,
+  AdapterModelDiscoveryContext,
 } from "@paperclipai/adapter-utils";
 import { evaluateCodexCredentialReadiness } from "@paperclipai/adapter-codex-local/server";
 import type { AdapterAuthSignal, AdapterAuthSignalResponse, CodexAccountBindingClaim } from "@paperclipai/shared";
@@ -3228,6 +3230,7 @@ export function agentRoutes(
       return;
     }
     const provider = asNonEmptyString(req.query.provider);
+    const connectionId = asNonEmptyString(req.query.connectionId);
     if (type === "opencode_local" && provider === "openrouter") {
       res.json(await listOpenRouterModels(refresh));
       return;
@@ -3242,6 +3245,84 @@ export function agentRoutes(
       : type;
     if (modelAdapterType === "opencode_local" && environment && environment.driver !== "local") {
       res.json(requireServerAdapter(modelAdapterType).models ?? []);
+      return;
+    }
+    if (provider === "databricks") {
+      if (!connectionId) {
+        throw unprocessable("connectionId is required for provider=databricks");
+      }
+      // Databricks is only wired for codex_local (AI_CONNECTION_CAPABILITIES.databricks.methods.api_key.adapters).
+      // A different adapter type simply has no Databricks combos to offer.
+      if (!AI_CONNECTION_CAPABILITIES.databricks.methods.api_key?.adapters.includes(modelAdapterType)) {
+        res.json([]);
+        return;
+      }
+      const resolved = await aiConnectionService(db).resolveDatabricksCredential(
+        companyId,
+        connectionId,
+        responsibleUserForAiRequest(req),
+      );
+      if (!resolved.ok) {
+        // Maps resolveDatabricksCredential's reason to the HTTP statuses defined
+        // in Requirement 10 / Requirement 3: connection_missing never reveals
+        // cross-company existence (404), access_denied is a usable-grant failure
+        // (403), connection_unavailable covers a revoked connection (409), and
+        // incompatible/credential_missing are config/data issues on this
+        // connectionId (422).
+        switch (resolved.reason) {
+          case "connection_missing":
+            throw notFound(resolved.message, { code: resolved.reason });
+          case "access_denied":
+            throw forbidden(resolved.message, { code: resolved.reason });
+          case "connection_unavailable":
+            throw conflict(resolved.message, { code: resolved.reason });
+          case "incompatible":
+          case "credential_missing":
+          default:
+            throw unprocessable(resolved.message, { code: resolved.reason });
+        }
+      }
+      const context: AdapterModelDiscoveryContext = {
+        companyId,
+        provider,
+        connectionId,
+        refresh,
+        resolvedCredential: resolved.credential,
+      };
+      try {
+        const models = refresh
+          ? await refreshAdapterModels(modelAdapterType, context)
+          : await listAdapterModels(modelAdapterType, context);
+        res.json(models);
+      } catch (err) {
+        // The credential resolved above, but the live Unity Catalog call
+        // itself can still fail (Requirement 10.1-10.4): the workspace may
+        // reject the PAT (401), deny the catalog/schema (403), rate-limit
+        // (429, echoing Retry-After), be unreachable/5xx/timeout (502), or
+        // the stored host may fail live origin validation (422). None of
+        // this is a generic Paperclip bug, so it must not fall through to
+        // the catch-all 500 (Requirement 10.6).
+        if (err instanceof DatabricksDiscoveryError) {
+          if (err.kind === "rate_limited" && err.retryAfterSeconds !== undefined) {
+            res.setHeader("Retry-After", String(Math.round(err.retryAfterSeconds)));
+          }
+          switch (err.kind) {
+            case "invalid_credential":
+              throw unauthorized(err.message);
+            case "insufficient_permission":
+              throw forbidden(err.message);
+            case "rate_limited":
+              throw new HttpError(429, err.message, {
+                ...(err.retryAfterSeconds !== undefined ? { retryAfterSeconds: err.retryAfterSeconds } : {}),
+              });
+            case "unavailable":
+              throw new HttpError(502, err.message);
+            case "invalid_host":
+              throw unprocessable(err.message);
+          }
+        }
+        throw err;
+      }
       return;
     }
     const models = refresh
@@ -3312,6 +3393,21 @@ export function agentRoutes(
     // requirement stays for subscriptions: a stored login is a file layout
     // only a provider CLI reads, so proving the runtime lane can consume it
     // takes a real hello turn.
+    // Databricks only supports the api_key method (enforced by
+    // databricksConnectionConfigSchema/AI_CONNECTION_CAPABILITIES), so it would
+    // otherwise always land in the `resolvedMethod === "api_key"` branch below.
+    // It is guarded out here instead, before that branch, because
+    // `validateAiApiKey` has no Databricks entry in its provider-endpoint map
+    // (that path is OpenAI-oriented — see `validateAiApiKey`) and Databricks
+    // connectivity is verified separately via the Unity Gateway
+    // (`/ai-gateway/codex/v1`, task 8). Testing it here would double-test what
+    // the connectivity path already owns and could produce a confusing/incorrect
+    // result since there is no OpenAI-style hello-probe adapter for Databricks.
+    if (binding.provider === "databricks") {
+      result.status = "fail";
+      result.checks.push({ code: "ai_connection_validation_incomplete", level: "error", message: "The selected account has not completed a provider hello test. Retry before adopting it." });
+      return result;
+    }
     if (resolvedMethod === "api_key") {
       const envKey = AI_CONNECTION_CAPABILITIES[binding.provider].methods.api_key?.envKey;
       const key = envKey ? parseObject(context.config.env)[envKey] : undefined;

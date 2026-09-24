@@ -858,7 +858,7 @@ export async function reconcileManagedCodexHome(
   return { status, home: resolved };
 }
 
-export type CodexCredentialAuthMode = "api" | "subscription";
+export type CodexCredentialAuthMode = "api" | "subscription" | "databricks";
 
 export interface CodexCredentialReadinessInput {
   env?: NodeJS.ProcessEnv;
@@ -867,6 +867,19 @@ export interface CodexCredentialReadinessInput {
   configuredCodexHome: string | null | undefined;
   /** Resolved `config.env.OPENAI_API_KEY` value (after secret resolution). */
   configuredApiKey: string | null | undefined;
+  /**
+   * The resolved AI Connection provider driving this run, when known (e.g.
+   * `"databricks"`). Sourced from `config.providerRuntimeHint.provider` /
+   * `config.managedAiConnection.provider` by the caller -- this function never
+   * inspects `PAPERCLIP_CODEX_PROVIDERS` env JSON itself, since callers such as
+   * `assertCodexCredentialsLaunchable` run before that env var is generated.
+   */
+  activeProvider?: string | null;
+  /**
+   * Resolved `config.env.DATABRICKS_TOKEN` value for the run, if any. Only
+   * consulted when `activeProvider === "databricks"`.
+   */
+  configuredDatabricksToken?: string | null;
 }
 
 export interface CodexCredentialReadiness {
@@ -887,6 +900,12 @@ export interface CodexCredentialReadiness {
  * check *before* dispatch and surface a configuration-incomplete blocker instead
  * of dispatching a run that is guaranteed to fail with "no Codex credentials".
  *
+ * - When `activeProvider === "databricks"`, readiness is a pure env check: a
+ *   non-empty `configuredDatabricksToken` is sufficient on its own, and
+ *   `OPENAI_API_KEY`/`auth.json` are not consulted at all (Requirement 6.3).
+ *   This mirrors the `configuredApiKey` branch below in that it never touches
+ *   disk, but is checked first because a Databricks-active run's `CODEX_HOME`
+ *   auth state is irrelevant to whether the run can authenticate.
  * - An external/user-supplied `CODEX_HOME` override manages its own auth, so it
  *   is always treated as ready (Paperclip must not seed or inspect it).
  * - A non-empty resolved `OPENAI_API_KEY` means API-key auth, always ready.
@@ -908,6 +927,17 @@ export async function evaluateCodexCredentialReadiness(
     configuredCodexHome != null && isManagedCodexHomePath(env, input.companyId, configuredCodexHome);
   const effectiveHomeIsManaged = configuredCodexHome == null || configuredHomeIsManaged;
   const effectiveHome = configuredCodexHome ?? resolveManagedCodexHomeDir(env, input.companyId);
+
+  if (input.activeProvider === "databricks") {
+    const configuredDatabricksToken = nonEmpty(input.configuredDatabricksToken ?? undefined);
+    return {
+      managed: effectiveHomeIsManaged,
+      authMode: "databricks",
+      ready: configuredDatabricksToken != null,
+      effectiveHome,
+      sharedSourceHome,
+    };
+  }
 
   if (!effectiveHomeIsManaged) {
     // Genuine external override: Paperclip never seeds or inspects it.

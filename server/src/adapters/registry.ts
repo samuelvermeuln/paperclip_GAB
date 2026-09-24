@@ -6,7 +6,7 @@ import {
   getAdapterSessionManagement,
   PAPERCLIP_RUNNER_PERMISSION_CAPABILITIES,
 } from "@paperclipai/adapter-utils";
-import type { AdapterLoginCapability } from "@paperclipai/adapter-utils";
+import type { AdapterLoginCapability, AdapterModelDiscoveryContext } from "@paperclipai/adapter-utils";
 import { runAdapterExecutionTargetShellCommand } from "@paperclipai/adapter-utils/execution-target";
 import {
   execute as claudeExecute,
@@ -1028,29 +1028,41 @@ function getDeclaredAdapterModels(): ReturnType<typeof parseAdapterModelsEnv> {
   return value;
 }
 
-export async function listAdapterModels(type: string): Promise<{ id: string; label: string }[]> {
+export async function listAdapterModels(
+  type: string,
+  context?: AdapterModelDiscoveryContext,
+): Promise<{ id: string; label: string }[]> {
   const declaredModels = getDeclaredAdapterModels();
-  if (declaredModels && declaredModels[type]?.length) {
+  if (declaredModels && declaredModels[type]?.length && context?.provider !== "databricks") {
+    // PAPERCLIP_ADAPTER_MODELS stays an OpenAI-only override path; Databricks
+    // discovery always goes live because combos are workspace-managed, not
+    // an admin-declared static list.
     return declaredModels[type].map((m) => ({ id: m.id, label: m.label ?? m.id }));
   }
   const adapter = findActiveServerAdapter(type);
   if (!adapter) return [];
   if (adapter.listModels) {
-    const discovered = await adapter.listModels();
+    const discovered = await adapter.listModels(context);
     if (discovered.length > 0) return discovered;
   }
   return adapter.models ?? [];
 }
 
-export async function refreshAdapterModels(type: string): Promise<{ id: string; label: string }[]> {
+export async function refreshAdapterModels(
+  type: string,
+  context?: AdapterModelDiscoveryContext,
+): Promise<{ id: string; label: string }[]> {
   const adapter = findActiveServerAdapter(type);
   if (!adapter) return [];
+  const refreshContext: AdapterModelDiscoveryContext | undefined = context
+    ? { ...context, refresh: true }
+    : undefined;
   if (adapter.refreshModels) {
-    const refreshed = await adapter.refreshModels();
+    const refreshed = await adapter.refreshModels(refreshContext);
     if (refreshed.length > 0) return refreshed;
   }
   if (adapter.listModels) {
-    const discovered = await adapter.listModels();
+    const discovered = await adapter.listModels(refreshContext);
     if (discovered.length > 0) return discovered;
   }
   return adapter.models ?? [];

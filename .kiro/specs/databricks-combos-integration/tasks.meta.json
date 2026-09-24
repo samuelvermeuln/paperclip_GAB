@@ -1,0 +1,921 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 Add `\"databricks\"` to `AI_PROVIDERS` and a `databricks` entry to": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022093433
+      },
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022111374
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790103181071
+      }
+    ],
+    "1.2 Add `databricksConnectionConfigSchema` (Zod) in `packages/shared` for": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022093712
+      },
+      {
+        "executionId": "ef95e81c-3788-4b8d-b876-4b2535e7c2d0",
+        "chatSessionId": "sess_869e52fe-a54e-4035-95a9-474750fa317f",
+        "timestamp": 1790024406933
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790103182830
+      }
+    ],
+    "1.3 Write unit tests for the schema: accept a bare `https://host` origin; reject": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022094062
+      },
+      {
+        "executionId": "b3c82879-d660-4407-8ac2-4c7007cc8c96",
+        "chatSessionId": "sess_c9dfde0e-efb0-47c1-b3e5-ac80350616b4",
+        "timestamp": 1790080909283
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790103183163
+      }
+    ],
+    "2.1 Add `AdapterModelDiscoveryContext` interface to `packages/adapter-utils/src/types.ts`": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022094337
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790103195801
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790103269150
+      }
+    ],
+    "2.2 Change `ServerAdapterModule.listModels`/`refreshModels` signatures to accept an": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022094558
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790103273430
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790103340643
+      }
+    ],
+    "2.3 Run `pnpm -r typecheck` scoped to `packages/adapter-utils` and every adapter package to": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022094734
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790103348664
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790103507770
+      }
+    ],
+    "3.1 Implement `DatabricksModelServiceCredential`, `DatabricksDiscoveryKey`,": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022094904
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790103514305
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104119845
+      }
+    ],
+    "3.2 Implement the paginated fetch against": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022095065
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104124717
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104128841
+      }
+    ],
+    "3.3 Implement `toAdapterModel` normalization (strip `model-services/` prefix, derive label": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022095227
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104133594
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104137913
+      }
+    ],
+    "3.4 Implement de-duplication by id, sort by label, optional `modelPrefix` filtering, and a": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022095375
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104142006
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104146296
+      }
+    ],
+    "3.5 Implement the in-process cache keyed by the full `DatabricksDiscoveryKey`": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022095529
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104150490
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104155917
+      }
+    ],
+    "3.6 Implement HTTP status-to-`DatabricksDiscoveryErrorKind` mapping (401 → invalid": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022095683
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104160553
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104164872
+      }
+    ],
+    "3.7 Write unit tests: prefix stripping, label normalization cases, pagination termination": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022095834
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104169399
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104173909
+      }
+    ],
+    "4.1 Add `resolveDatabricksCredential(companyId, connectionId, userId)` to": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022096025
+      },
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104180113
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790168903843
+      }
+    ],
+    "4.2 Ensure a `connectionId` belonging to a different company resolves to": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022096191
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790167285223
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790167757205
+      }
+    ],
+    "4.3 Wire connection edit/revoke mutations to call": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022096337
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790168911884
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790169754639
+      }
+    ],
+    "4.4 Write integration tests: cross-company `connectionId` returns not-found; actor without": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022096480
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790169762745
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790170094870
+      }
+    ],
+    "5.1 Update `listAdapterModels`/`refreshAdapterModels` in `server/src/adapters/registry.ts`": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022096636
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790170100764
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790170436321
+      }
+    ],
+    "5.2 Implement `listCodexModels(context)` in `server/src/adapters/codex-models.ts`: route to": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022096808
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790170440670
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790171045035
+      }
+    ],
+    "5.3 Wire the `codex_local` `ServerAdapterModule.listModels`/`refreshModels` implementation": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022096970
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790171052185
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790171936133
+      }
+    ],
+    "5.4 Write unit tests confirming a `provider=databricks` context never returns OpenAI models": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022097161
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790171940803
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790172183726
+      }
+    ],
+    "6.1 Extend `server/src/services/ai-connection-runtime.ts` `prepareManagedAiRuntime` with a": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022097352
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790172189461
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790172819270
+      }
+    ],
+    "6.2 Confirm `stripAiAuthBindings` already excludes the Databricks binding from persisted": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022097509
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790172823982
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790173391849
+      }
+    ],
+    "6.3 In `packages/adapters/codex-local/src/server/execute.ts`, when a `providerRuntimeHint`": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022097672
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790173396585
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790182900398
+      }
+    ],
+    "6.4 Confirm the Codex `model` field passed to the run equals the persisted combo id exactly": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022097864
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790182905460
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790183065798
+      }
+    ],
+    "6.5 Write integration tests: generated provider payload contains": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022098035
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790183070522
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790184386177
+      }
+    ],
+    "7.1 Extend `evaluateCodexCredentialReadiness` (`packages/adapters/codex-local/src/server/codex-home.ts`)": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022098214
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790184405936
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790184923460
+      }
+    ],
+    "7.2 Confirm existing OpenAI-oriented readiness checks are unchanged for non-Databricks runs": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022098368
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790184929341
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790185219263
+      }
+    ],
+    "7.3 Write unit tests for both branches: Databricks-active run ready with only": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022098511
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790185224658
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790185333718
+      }
+    ],
+    "8.1 Extend `packages/adapters/codex-local/src/server/test.ts` to run a minimal connectivity": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022098665
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790185340238
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790185843932
+      }
+    ],
+    "9.1 Extend `GET /companies/:companyId/adapters/:type/models` in": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022098847
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790185850681
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790187227364
+      }
+    ],
+    "9.2 Call `resolveDatabricksCredential`, map resolution failures to the HTTP statuses defined": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022099003
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790187235178
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790188081897
+      }
+    ],
+    "9.3 Ensure the JSON response contains only `{ id, label }` per model — never `host`,": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022099164
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790188089259
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790188395963
+      }
+    ],
+    "9.4 Write integration tests: missing `connectionId` → 422; invalid/expired PAT → 401;": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022099326
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790188401949
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790188868825
+      }
+    ],
+    "10.1 In `ui/src/api/agents.ts`, extend `adapterModels(...)` to accept and forward `provider`": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022099495
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790188877239
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790189159232
+      }
+    ],
+    "10.2 In `ui/src/components/AgentConfigForm.tsx`, derive `modelProvider = \"databricks\"` when": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022099712
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790189166883
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790189604081
+      }
+    ],
+    "10.3 Wire the existing \"Refresh models\" action to pass `refresh: true` for the Databricks": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022099888
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790189610533
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790189906440
+      }
+    ],
+    "10.4 Relabel the model field as \"Combo\" when `modelProvider === \"databricks\"`": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022100119
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790189912261
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790191086611
+      }
+    ],
+    "10.5 Extend the \"unknown model\" rendering path so a saved combo id absent from the current": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022100293
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790191092900
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790191767357
+      }
+    ],
+    "10.6 Confirm the combo dropdown's data source is exactly the single-provider server": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022100446
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790191773315
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790192183617
+      }
+    ],
+    "11.1 Confirm the existing run-log path (`heartbeat_run_events` / `appendRunEvent`) records": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022100622
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790192191130
+      }
+    ],
+    "11.2 If Databricks response metadata reliably includes cached-token counts, record them;": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022100782
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790193075263
+      }
+    ],
+    "11.3 Confirm no code path infers or displays the combo's internal destination model unless": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022100932
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790193088708
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790193225851
+      }
+    ],
+    "11.4 Write a test asserting run-log entries for a Databricks run contain no token substring": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022101106
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790193231419
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790193552907
+      }
+    ],
+    "12.1 Update `docs/adapters/codex-local.md` with Databricks connection setup and diagnostics": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022101267
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790192192605
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790193073570
+      }
+    ],
+    "12.2 Update `docs/deploy/environment-variables.md` only if a single-tenant/administered": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022101480
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790193559967
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790193674243
+      }
+    ],
+    "13.1 Run `pnpm -r typecheck`, `pnpm test:run`, and `pnpm build`; fix any failures surfaced by": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022101628
+      },
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790193736417
+      },
+      {
+        "executionId": "869f48b3-e744-4182-8dbc-40520fd1a893",
+        "chatSessionId": "sess_c4285c0a-9f5b-4c9a-913b-1d9fbe69f5a1",
+        "timestamp": 1790245364596
+      }
+    ],
+    "13.2 Re-run the targeted unit/integration suites from tasks 3.7, 4.4, 5.4, 6.5, 7.3, 9.4,": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022101832
+      },
+      {
+        "executionId": "869f48b3-e744-4182-8dbc-40520fd1a893",
+        "chatSessionId": "sess_c4285c0a-9f5b-4c9a-913b-1d9fbe69f5a1",
+        "timestamp": 1790245475562
+      }
+    ],
+    "13.3 Execute the manual E2E script from `design.md` Testing Strategy (create connection,": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022102006
+      },
+      {
+        "executionId": "869f48b3-e744-4182-8dbc-40520fd1a893",
+        "chatSessionId": "sess_c4285c0a-9f5b-4c9a-913b-1d9fbe69f5a1",
+        "timestamp": 1790246947989
+      }
+    ],
+    "13.4 Review every acceptance criterion in `requirements.md` against the implemented": [
+      {
+        "executionId": "688d5fdd-f33b-4d1d-a59b-b7470ddf1a05",
+        "chatSessionId": "sess_36f76d04-3157-4e8e-a20f-95ce2116fc41",
+        "timestamp": 1790022102162
+      },
+      {
+        "executionId": "869f48b3-e744-4182-8dbc-40520fd1a893",
+        "chatSessionId": "sess_c4285c0a-9f5b-4c9a-913b-1d9fbe69f5a1",
+        "timestamp": 1790248469223
+      }
+    ],
+    "1. Shared contracts: Databricks AI Connection provider": [
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790103183394
+      }
+    ],
+    "2. Shared contracts: model discovery context": [
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790103508039
+      }
+    ],
+    "3. Databricks REST client: `server/src/services/databricks-model-services.ts`": [
+      {
+        "executionId": "b4aa2745-1943-4526-a5d2-ac43119bec89",
+        "chatSessionId": "sess_70980fa8-8e29-42f3-8860-81b636cb2bf6",
+        "timestamp": 1790104174275
+      }
+    ],
+    "4. Security: connection resolution and authorization": [
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790170095140
+      }
+    ],
+    "5. Model registry plumbing": [
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790172183915
+      }
+    ],
+    "6. Runtime: per-run Codex provider generation for Databricks": [
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790184386465
+      }
+    ],
+    "7. Auth readiness for Databricks-active runs": [
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790185334010
+      }
+    ],
+    "8. Connectivity test path": [
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790185844291
+      }
+    ],
+    "9. API: models endpoint extension": [
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790188869471
+      }
+    ],
+    "10. UI: provider, connection, and combo selection": [
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790192183879
+      }
+    ],
+    "11. Observability": [
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790193553316
+      }
+    ],
+    "12. Documentation": [
+      {
+        "executionId": "53f8771f-d639-44ac-a522-752c49271ae9",
+        "chatSessionId": "sess_9ee24870-f513-41ef-831b-59f33b1a2dcf",
+        "timestamp": 1790193674517
+      }
+    ],
+    "13. Full verification pass": [
+      {
+        "executionId": "869f48b3-e744-4182-8dbc-40520fd1a893",
+        "chatSessionId": "sess_c4285c0a-9f5b-4c9a-913b-1d9fbe69f5a1",
+        "timestamp": 1790248469456
+      }
+    ]
+  }
+}

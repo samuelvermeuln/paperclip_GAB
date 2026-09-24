@@ -991,6 +991,105 @@ describe("evaluateCodexCredentialReadiness", () => {
     }
   });
 
+  it("is ready for a Databricks-active run with only a non-empty DATABRICKS_TOKEN set", async () => {
+    const fx = await makeFixture();
+    try {
+      const result = await evaluateCodexCredentialReadiness({
+        env: fx.env,
+        companyId: "company-1",
+        configuredCodexHome: fx.managedAgentHome,
+        configuredApiKey: null,
+        activeProvider: "databricks",
+        configuredDatabricksToken: "dapi-123",
+      });
+      expect(result).toMatchObject({
+        managed: true,
+        authMode: "databricks",
+        ready: true,
+        effectiveHome: path.resolve(fx.managedAgentHome),
+        sharedSourceHome: fx.sharedCodexHome,
+      });
+    } finally {
+      await fs.rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it("is not ready for a Databricks-active run with an empty DATABRICKS_TOKEN, even when an OPENAI_API_KEY is also configured", async () => {
+    const fx = await makeFixture();
+    try {
+      const result = await evaluateCodexCredentialReadiness({
+        env: fx.env,
+        companyId: "company-1",
+        configuredCodexHome: fx.managedAgentHome,
+        configuredApiKey: "sk-agent-key",
+        activeProvider: "databricks",
+        configuredDatabricksToken: "",
+      });
+      expect(result).toMatchObject({ authMode: "databricks", ready: false });
+    } finally {
+      await fs.rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it("evaluates the Databricks branch as a pure env check, without touching disk", async () => {
+    const fx = await makeFixture();
+    try {
+      const missingHome = path.join(fx.root, "does-not-exist", "codex-home");
+      const result = await evaluateCodexCredentialReadiness({
+        env: fx.env,
+        companyId: "company-1",
+        configuredCodexHome: missingHome,
+        configuredApiKey: null,
+        activeProvider: "databricks",
+        configuredDatabricksToken: "dapi-123",
+      });
+      expect(result).toMatchObject({ authMode: "databricks", ready: true });
+      expect(result.effectiveHome).toBe(path.resolve(missingHome));
+    } finally {
+      await fs.rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a Databricks-active run against an external/user-supplied CODEX_HOME as unmanaged, mirroring the non-Databricks computation", async () => {
+    const fx = await makeFixture();
+    try {
+      const externalHome = path.join(fx.root, "user-codex-home");
+      const result = await evaluateCodexCredentialReadiness({
+        env: fx.env,
+        companyId: "company-1",
+        configuredCodexHome: externalHome,
+        configuredApiKey: null,
+        activeProvider: "databricks",
+        configuredDatabricksToken: "dapi-123",
+      });
+      expect(result).toMatchObject({
+        managed: false,
+        authMode: "databricks",
+        ready: true,
+        effectiveHome: path.resolve(externalHome),
+        sharedSourceHome: fx.sharedCodexHome,
+      });
+    } finally {
+      await fs.rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it("treats a non-databricks activeProvider (e.g. 'openai') the same as an omitted activeProvider for an existing OPENAI_API_KEY", async () => {
+    const fx = await makeFixture();
+    try {
+      const result = await evaluateCodexCredentialReadiness({
+        env: fx.env,
+        companyId: "company-1",
+        configuredCodexHome: fx.managedAgentHome,
+        configuredApiKey: "sk-agent-key",
+        activeProvider: "openai",
+      });
+      expect(result).toMatchObject({ managed: true, authMode: "api", ready: true });
+    } finally {
+      await fs.rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
   it("replaces the managed MCP block and clears stale servers for an empty runtime set", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-mcp-config-"));
     try {

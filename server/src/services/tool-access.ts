@@ -1,5 +1,6 @@
 import { isRemoteMcpConnectorMethod, connectionPurposeTransportSchema } from "@paperclipai/shared";
 import { instanceSettingsService } from "./instance-settings.js";
+import { invalidateDatabricksModelServiceCache } from "./databricks-model-services.js";
 import { githubBotRequest } from "./chat-github-client.js";
 import { syncConnectionCredentialBindings } from "./connection-credential-bindings.js";
 import { canBrowseProjectRepositoryGrant, mergeProjectRepository } from "./project-repositories.js";
@@ -6443,6 +6444,9 @@ export function toolAccessService(
           ),
         );
     }
+
+    if (connection.connectionPurpose === "ai" && (connection.config as { ai?: { provider?: string } }).ai?.provider === "databricks")
+      invalidateDatabricksModelServiceCache(connection.id);
 
     return {
       connection: toConnection(cleared ?? archived.connection),
@@ -17892,6 +17896,8 @@ export function toolAccessService(
         reasonCode: "grant_revoked",
         details: { grantId: grant.id, kind: grant.kind, providerRevocation },
       });
+      if (connection.connectionPurpose === "ai" && (connection.config as { ai?: { provider?: string } }).ai?.provider === "databricks")
+        invalidateDatabricksModelServiceCache(connection.id);
       return toConnectionGrant(grant);
     },
 
@@ -18204,6 +18210,10 @@ export function toolAccessService(
         .returning();
       await syncCredentialBindings(row);
       await ensureRuntimeSlot(row);
+      // A disable/pause (or any other edit) can make previously discovered
+      // combos unreachable or stale; drop any cached list for this connection.
+      if (row.connectionPurpose === "ai" && (row.config as { ai?: { provider?: string } }).ai?.provider === "databricks")
+        invalidateDatabricksModelServiceCache(row.id);
       return toConnection(row);
     },
 

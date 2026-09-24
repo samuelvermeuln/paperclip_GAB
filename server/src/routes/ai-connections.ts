@@ -1,4 +1,5 @@
 import { supportsLocalAiLogin } from "../services/local-ai-login-policy.js";
+import { isDatabricksHostAllowed } from "../services/databricks-host-policy.js";
 import { readVerifiedLocalAiCredential } from "../services/local-ai-credentials.js";
 import { localAiLoginService } from "../services/local-ai-login.js";
 import { z } from "zod";
@@ -28,6 +29,11 @@ import { accessService } from "../services/access.js";
 import { logActivity } from "../services/activity-log.js";
 import { aiConnectionService } from "../services/ai-connections.js";
 import { validate } from "../middleware/validate.js";
+import {
+  validateDatabricksCredential,
+  DatabricksDiscoveryError,
+  type DatabricksModelServiceCredential,
+} from "../services/databricks-model-services.js";
 
 /** Agent API calls inherit authenticated run identity, never the agent's own ID. */
 export function responsibleUserForAiRequest(req: Request): string | null {
@@ -132,9 +138,11 @@ export async function canInstallSharedAiConnectionForNewAgent(
     connection.creator === userId || await accessService(db).hasPermission(companyId, "user", userId, "tools:manage_connections");
 }
 
-/** Fixed provider endpoints; credentials are never sent to a caller-supplied URL or through a redirect. */
+/** Fixed provider endpoints; credentials are never sent to a caller-supplied URL or through a redirect.
+ * Databricks is validated separately via `validateDatabricksCredential` (it has no fixed
+ * endpoint URL — the workspace host is caller-supplied per connection), so it is excluded here. */
 export async function validateAiApiKey(
-  provider: AiProvider,
+  provider: Exclude<AiProvider, "databricks">,
   key: string,
   request: typeof fetch = fetch,
 ) {
@@ -166,7 +174,74 @@ export async function validateAiApiKey(
     );
 }
 
-export function aiConnectionRoutes(db: Db, options: Parameters<typeof supportsLocalAiLogin>[0] = {}) {
+/** Requirement 1.4: on a SaaS deployment, reject a workspace host origin that is not on the
+ * configured allowlist, unless private/self-hosted hosts have been explicitly enabled for this
+ * deployment. Thrown before the live credential check so a disallowed host never reaches
+ * Databricks. Non-SaaS deployments are unaffected. */
+function assertDatabricksHostAllowed(
+  workspaceHost: string,
+  options: AiConnectionRouteOptions,
+) {
+  let origin: string;
+  try {
+    origin = new URL(workspaceHost).origin;
+  } catch {
+    throw unprocessable("The Databricks workspace host is invalid.");
+  }
+  if (
+    !isDatabricksHostAllowed(origin, {
+      deploymentMode: options.deploymentMode,
+      deploymentExposure: options.deploymentExposure,
+      allowPrivateHosts: options.allowPrivateDatabricksHosts,
+      hostAllowlist: options.databricksHostAllowlist,
+    })
+  )
+    throw unprocessable(
+      "This workspace host is not on the configured allowlist for this deployment.",
+    );
+}
+
+/** Validates a Databricks PAT + workspace config live against Unity Catalog Model
+ * Services, mapping any `DatabricksDiscoveryError` to the same `unprocessable(...)`
+ * error style the generic provider path above uses. Never lets a raw
+ * `DatabricksDiscoveryError` escape uncaught, and never surfaces the token or a
+ * provider response body (both guarantees already hold in the underlying error). */
+async function validateDatabricksApiKey(input: {
+  apiKey: string;
+  workspaceHost?: string;
+  catalog?: string;
+  schema?: string;
+  modelPrefix?: string;
+}) {
+  const credential: DatabricksModelServiceCredential = {
+    host: input.workspaceHost!,
+    token: input.apiKey,
+    catalog: input.catalog!,
+    schema: input.schema!,
+    modelPrefix: input.modelPrefix,
+  };
+  try {
+    await validateDatabricksCredential(credential);
+  } catch (error) {
+    if (!(error instanceof DatabricksDiscoveryError)) throw error;
+    if (error.kind === "invalid_host")
+      throw unprocessable("The Databricks workspace host is invalid.");
+    if (error.kind === "invalid_credential" || error.kind === "insufficient_permission")
+      throw unprocessable("The provider rejected this API key.");
+    throw unprocessable("The provider could not verify this account. Try again.");
+  }
+}
+
+/** Options for `aiConnectionRoutes`. Extends the local-AI-login policy options with the
+ * Databricks host-allowlist policy inputs (Requirement 1.4), following the same
+ * injectable-options style as `supportsLocalAiLogin` rather than reading env vars directly at
+ * the route layer. */
+export type AiConnectionRouteOptions = Parameters<typeof supportsLocalAiLogin>[0] & {
+  allowPrivateDatabricksHosts?: boolean;
+  databricksHostAllowlist?: ReadonlySet<string>;
+};
+
+export function aiConnectionRoutes(db: Db, options: AiConnectionRouteOptions = {}) {
   function assertLocalLoginAvailable() {
     if (!supportsLocalAiLogin(options)) throw unprocessable("Server-host subscription sign-in is unavailable on this hosted instance. Choose a supported sign-in environment or use an API key.");
   }
@@ -281,7 +356,10 @@ export function aiConnectionRoutes(db: Db, options: Parameters<typeof supportsLo
           "Use the existing provider sign-in flow to connect a subscription",
         );
       const attemptStartedAt = new Date();
-      await validateAiApiKey(input.provider, input.apiKey!);
+      if (input.provider === "databricks") {
+        assertDatabricksHostAllowed(input.workspaceHost!, options);
+        await validateDatabricksApiKey({ ...input, apiKey: input.apiKey! });
+      } else await validateAiApiKey(input.provider, input.apiKey!);
       const result = await service.save(
         companyId,
         userId,

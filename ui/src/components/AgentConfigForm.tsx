@@ -890,12 +890,22 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     ? String(isCreate ? props.values.adapterSchemaValues?.provider ?? "codex"
       : eff("adapterConfig", "provider", config.provider === "acpx" && config.acpxAgent === "codex" ? "codex" : config.provider ?? "codex"))
     : undefined;
-  const modelProvider = adapterType === "opencode_local" && aiConnectionBindingSchema.safeParse(
+  const effectiveAiBinding = aiConnectionBindingSchema.safeParse(
     (overlay.runtime.runtimeConfig as Record<string, unknown> | undefined)?.aiConnection ?? runtimeConfig.aiConnection,
-  ).data?.provider === "openrouter" ? "openrouter" : runnerProvider;
+  ).data;
+  const modelProvider = adapterType === "opencode_local" && effectiveAiBinding?.provider === "openrouter"
+    ? "openrouter"
+    : adapterType === "codex_local" && effectiveAiBinding?.provider === "databricks"
+      ? "databricks"
+      : runnerProvider;
+  // A "responsible_user" binding defers connection choice to the server, so no
+  // connectionId is available client-side yet; combo discovery requires one explicitly.
+  const databricksConnectionId = modelProvider === "databricks" && effectiveAiBinding?.mode !== "responsible_user"
+    ? effectiveAiBinding?.connectionId
+    : undefined;
   // Fetch adapter models for the effective provider, including unsaved changes.
   const modelQueryKey = selectedCompanyId
-    ? queryKeys.agents.adapterModels(selectedCompanyId, adapterType, currentDefaultEnvironmentId || null, modelProvider)
+    ? queryKeys.agents.adapterModels(selectedCompanyId, adapterType, currentDefaultEnvironmentId || null, modelProvider, databricksConnectionId)
     : ["agents", "none", "adapter-models", adapterType];
   const {
     data: fetchedModels,
@@ -905,8 +915,16 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     queryFn: () => agentsApi.adapterModels(selectedCompanyId!, adapterType, {
       environmentId: currentDefaultEnvironmentId || null,
       provider: modelProvider,
+      connectionId: databricksConnectionId,
     }),
-    enabled: Boolean(selectedCompanyId),
+    enabled: Boolean(selectedCompanyId) && (modelProvider !== "databricks" || Boolean(databricksConnectionId)),
+    // Matches the server-side discovery cache TTL (CACHE_TTL_MS in
+    // databricks-model-services.ts) so the client doesn't refetch more often than the
+    // server-side result can actually change. Applied for every provider, not just
+    // Databricks: a manual "Refresh models" always bypasses this via
+    // queryClient.setQueryData(...) in handleRefreshModels, so staleness here only
+    // affects automatic background refetches (mount/focus), never a manual refresh.
+    staleTime: 60_000,
   });
   const [refreshModelsError, setRefreshModelsError] = useState<string | null>(null);
   const [refreshingModels, setRefreshingModels] = useState(false);
@@ -1246,13 +1264,22 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
     ? val!.model ?? ""
     : eff("adapterConfig", "model", String(config.model ?? ""));
   const currentModelId = typeof currentModelValue === "string" ? currentModelValue : "";
+  // Requirement 8.5 / 4.2: only meaningful for Databricks combos, and only once
+  // a real (successfully fetched, non-erroring) list is in hand — a momentary
+  // loading/empty flicker or a failed fetch must never be treated as proof the
+  // combo is gone.
+  const databricksModelUnavailable = modelProvider === "databricks"
+    && Boolean(currentModelId)
+    && Boolean(fetchedModels)
+    && !fetchedModelsError
+    && !fetchedModels!.some((m) => m.id === currentModelId);
 
   async function handleRefreshModels() {
     if (!selectedCompanyId) return;
     setRefreshingModels(true);
     setRefreshModelsError(null);
     try {
-      const refreshed = await agentsApi.adapterModels(selectedCompanyId, adapterType, { refresh: true, environmentId: currentDefaultEnvironmentId || null, provider: modelProvider });
+      const refreshed = await agentsApi.adapterModels(selectedCompanyId, adapterType, { refresh: true, environmentId: currentDefaultEnvironmentId || null, provider: modelProvider, connectionId: databricksConnectionId });
       queryClient.setQueryData(modelQueryKey, refreshed);
     } catch (error) {
       setRefreshModelsError(error instanceof Error ? error.message : "Failed to refresh adapter models.");
@@ -1377,7 +1404,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
           <div className="sticky top-0 z-10 flex items-center justify-end border-b border-primary/20 bg-background/90 px-4 py-2 backdrop-blur-sm">
             <div className="flex items-center gap-3">
               <span className="text-xs text-muted-foreground">Unsaved changes</span>
-              <Button size="sm" onClick={handleSave} disabled={props.isSaving}>
+              <Button size="sm" onClick={handleSave} disabled={props.isSaving || databricksModelUnavailable}>
                 {props.isSaving ? "Saving..." : "Save"}
               </Button>
             </div>
@@ -1429,7 +1456,7 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
             <Button
               size="sm"
               onClick={handleSave}
-              disabled={!isCreate && props.isSaving}
+              disabled={(!isCreate && props.isSaving) || databricksModelUnavailable}
             >
               {!isCreate && props.isSaving ? "Saving..." : "Save"}
             </Button>
@@ -1712,6 +1739,8 @@ export function AgentConfigForm(props: AgentConfigFormProps) {
               <ModelDropdown
                 models={models}
                 value={currentModelId}
+                label={modelProvider === "databricks" ? "Combo" : undefined}
+                unavailableValue={databricksModelUnavailable}
                 onChange={(v) => {
                   const supportedEfforts = codexReasoningEffortOptions(v, "Auto");
                   const clearUnsupportedEffort = adapterType === "codex_local"
@@ -3700,6 +3729,8 @@ export function ModelDropdown({
   detectModelLabel,
   emptyDetectHint,
   defaultLabel,
+  label = "Model",
+  unavailableValue,
 }: {
   models: AdapterModel[];
   value: string;
@@ -3718,6 +3749,16 @@ export function ModelDropdown({
   detectModelLabel?: string;
   emptyDetectHint?: string;
   defaultLabel?: string;
+  /** Overrides the field label (defaults to "Model"); e.g. "Combo" for Databricks. */
+  label?: string;
+  /**
+   * True when `value` is known to be genuinely absent from a successfully
+   * fetched, current `models` list (Databricks combo case). Renders the
+   * "current value" entry as a disabled "Unavailable" state instead of the
+   * green "current" badge. Left undefined/false for every other provider,
+   * which keeps the original "current" badge behavior unchanged.
+   */
+  unavailableValue?: boolean;
 }) {
   const [modelSearch, setModelSearch] = useState("");
   const [detectingModel, setDetectingModel] = useState(false);
@@ -3791,7 +3832,7 @@ export function ModelDropdown({
   }
 
   return (
-    <Field label="Model" hint={help.model}>
+    <Field label={label} hint={help.model}>
       <Popover
         open={open}
         onOpenChange={(nextOpen) => {
@@ -3870,8 +3911,12 @@ export function ModelDropdown({
             <button
               type="button"
               className={cn(
-                "flex items-center w-full px-2 py-1.5 text-sm rounded bg-accent/50",
+                "flex items-center w-full px-2 py-1.5 text-sm rounded",
+                unavailableValue
+                  ? "cursor-not-allowed opacity-60"
+                  : "bg-accent/50",
               )}
+              disabled={unavailableValue}
               onClick={() => {
                 onOpenChange(false);
               }}
@@ -3879,9 +3924,15 @@ export function ModelDropdown({
               <span className="block w-full text-left truncate font-mono text-xs" title={value}>
                 {models.find((m) => m.id === value)?.label ?? value}
               </span>
-              <Badge variant="outline" className="ml-auto text-(length:--text-nano) px-1.5 bg-green-500/15 text-green-400 border-green-500/20">
-                current
-              </Badge>
+              {unavailableValue ? (
+                <Badge variant="outline" className="ml-auto text-(length:--text-nano) px-1.5 bg-destructive/15 text-destructive border-destructive/20">
+                  Unavailable
+                </Badge>
+              ) : (
+                <Badge variant="outline" className="ml-auto text-(length:--text-nano) px-1.5 bg-green-500/15 text-green-400 border-green-500/20">
+                  current
+                </Badge>
+              )}
             </button>
           )}
           {detectedModel && detectedModel !== value && (

@@ -89,6 +89,10 @@ import {
   resolveCodexAuthPrecedence,
 } from "./auth-precedence.js";
 import { prepareCodexRuntimeConfig } from "./runtime-config.js";
+import {
+  buildDatabricksProviderRuntimeEnv,
+  readDatabricksProviderRuntimeHint,
+} from "./databricks-provider-runtime.js";
 import { resolveCodexDesiredSkillNames } from "./skills.js";
 import { buildCodexExecArgs } from "./codex-args.js";
 import { SANDBOX_INSTALL_COMMAND } from "../index.js";
@@ -188,12 +192,30 @@ function hasNonEmptyEnvValue(env: Record<string, string>, key: string): boolean 
   return typeof raw === "string" && raw.trim().length > 0;
 }
 
-function resolveCodexBillingType(env: Record<string, string>): "api" | "subscription" {
+export function resolveCodexBillingType(
+  env: Record<string, string>,
+  isDatabricksActive: boolean,
+): "api" | "subscription" {
+  // A Databricks-active run authenticates via DATABRICKS_TOKEN (never
+  // OPENAI_API_KEY) and is an API-key-style billing relationship, not a
+  // ChatGPT subscription -- same class of credential-readiness check as
+  // `evaluateCodexCredentialReadiness` (codex-home.ts), which already treats
+  // a non-empty DATABRICKS_TOKEN as sufficient without OPENAI_API_KEY.
+  if (isDatabricksActive) return "api";
   // Codex uses API-key auth when OPENAI_API_KEY is present; otherwise rely on local login/session auth.
   return hasNonEmptyEnvValue(env, "OPENAI_API_KEY") ? "api" : "subscription";
 }
 
-function resolveCodexBiller(env: Record<string, string>, billingType: "api" | "subscription"): string {
+export function resolveCodexBiller(
+  env: Record<string, string>,
+  billingType: "api" | "subscription",
+  isDatabricksActive: boolean,
+): string {
+  // Databricks is its own distinct billing relationship (a PAT against a
+  // Databricks workspace), the same class of decision as e.g. `xai`/
+  // `aws_bedrock`/`moonshot` in the other adapters -- never attributed to
+  // OpenAI/ChatGPT/OpenRouter billing.
+  if (isDatabricksActive) return "databricks";
   const openAiCompatibleBiller = inferOpenAiCompatibleBiller(env, "openai");
   if (openAiCompatibleBiller === "openrouter") return "openrouter";
   return billingType === "subscription" ? "chatgpt" : openAiCompatibleBiller ?? "openai";
@@ -387,12 +409,20 @@ export async function assertCodexCredentialsLaunchable(input: {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   onLog: AdapterExecutionContext["onLog"];
+  /** `config.providerRuntimeHint.provider`, when the resolved AI Connection
+   * binding for this run is Databricks. Passed explicitly because this gate
+   * runs before `PAPERCLIP_CODEX_PROVIDERS` is generated from that hint. */
+  activeProvider?: string | null;
+  /** Resolved `config.env.DATABRICKS_TOKEN` for this run, if any. */
+  configuredDatabricksToken?: string | null;
 }): Promise<void> {
   const credentialReadiness = await evaluateCodexCredentialReadiness({
     env: input.env ?? process.env,
     companyId: input.companyId,
     configuredCodexHome: input.configuredCodexHome,
     configuredApiKey: input.configuredApiKey,
+    activeProvider: input.activeProvider,
+    configuredDatabricksToken: input.configuredDatabricksToken,
   });
   if (!credentialReadiness.managed || credentialReadiness.ready) return;
 
@@ -656,6 +686,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   if (!executionTargetIsRemote) {
     await ensureAbsoluteDirectory(cwd, { createIfMissing: true });
   }
+  const providerRuntimeHint = readDatabricksProviderRuntimeHint(config);
+  const configuredDatabricksToken =
+    typeof envConfig.DATABRICKS_TOKEN === "string" && envConfig.DATABRICKS_TOKEN.trim().length > 0
+      ? envConfig.DATABRICKS_TOKEN.trim()
+      : null;
   const configuredOpenAiApiKey =
     typeof envConfig.OPENAI_API_KEY === "string" && envConfig.OPENAI_API_KEY.trim().length > 0
       ? envConfig.OPENAI_API_KEY.trim()
@@ -730,15 +765,28 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     target: executionTarget,
     cwd,
     onLog,
+    activeProvider: providerRuntimeHint?.provider,
+    configuredDatabricksToken,
   });
   // Merge custom model providers (PAPERCLIP_CODEX_PROVIDERS) into the managed
   // CODEX_HOME's config.toml BEFORE the home is shipped to a remote execution
   // target, so both local and sandboxed Codex processes pick up the routing.
   // An explicit env.CODEX_HOME override is treated as user-managed and skipped.
-  const envConfigStrings = Object.fromEntries(
+  const envConfigStringsBeforeProviderHint = Object.fromEntries(
     Object.entries(envConfig).filter(
       (entry): entry is [string, string] => typeof entry[1] === "string",
     ),
+  );
+  // When the resolved AI Connection binding is Databricks,
+  // prepareManagedAiRuntime (server/src/services/ai-connection-runtime.ts)
+  // attaches a `providerRuntimeHint` to `config`. Build the
+  // PAPERCLIP_CODEX_PROVIDERS payload from it here, taking precedence over any
+  // pre-existing value, so this run's Codex process talks to the workspace's
+  // Unity Gateway (`<host>/ai-gateway/codex/v1`) instead of OpenAI, via
+  // env_key = "DATABRICKS_TOKEN" indirection only -- never the literal token.
+  const envConfigStrings = buildDatabricksProviderRuntimeEnv(
+    envConfigStringsBeforeProviderHint,
+    config,
   );
   const preparedRuntimeConfig = await prepareCodexRuntimeConfig({
     env: envConfigStrings,
@@ -995,7 +1043,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         (entry): entry is [string, string] => typeof entry[1] === "string",
       ),
     );
-    const billingType = resolveCodexBillingType(effectiveEnv);
+    const isDatabricksActive = providerRuntimeHint?.provider === "databricks";
+    const billingType = resolveCodexBillingType(effectiveEnv, isDatabricksActive);
     const networkScope = parseLocalProcessNetworkScope(config.networkScope);
     const filesystemScope = parseLocalProcessFilesystemScope(config.filesystemScope);
     const localProcessSandbox: LocalProcessSandboxOptions | null =
@@ -1404,8 +1453,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
           sessionId: null,
           sessionParams: null,
           sessionDisplayId: null,
-          provider: "openai",
-          biller: resolveCodexBiller(effectiveEnv, billingType),
+          provider: isDatabricksActive ? "databricks" : "openai",
+          biller: resolveCodexBiller(effectiveEnv, billingType, isDatabricksActive),
           model,
           billingType,
           costUsd: null,
@@ -1533,8 +1582,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         sessionId: resolvedSessionId,
         sessionParams: resolvedSessionParams,
         sessionDisplayId: resolvedSessionId,
-        provider: "openai",
-        biller: resolveCodexBiller(effectiveEnv, billingType),
+        provider: isDatabricksActive ? "databricks" : "openai",
+        biller: resolveCodexBiller(effectiveEnv, billingType, isDatabricksActive),
         model,
         billingType,
         costUsd: null,

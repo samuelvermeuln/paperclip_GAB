@@ -1,6 +1,9 @@
 import type { AdapterModel } from "./types.js";
+import type { AdapterModelDiscoveryContext } from "@paperclipai/adapter-utils";
 import { models as codexFallbackModels } from "@paperclipai/adapter-codex-local";
 import { readConfigFile } from "../config-file.js";
+import { unprocessable } from "../errors.js";
+import { listDatabricksModelServices } from "../services/databricks-model-services.js";
 
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 const OPENAI_MODELS_TIMEOUT_MS = 5000;
@@ -100,11 +103,49 @@ async function loadCodexModels(options?: { forceRefresh?: boolean }): Promise<Ad
   return fallback;
 }
 
-export async function listCodexModels(): Promise<AdapterModel[]> {
+/**
+ * Resolves the Databricks Unity Gateway combo list for a `provider:
+ * "databricks"` discovery context. Never merged with OpenAI/fallback models
+ * (Requirement 4.4) — this is the sole return value for the Databricks
+ * branch.
+ */
+async function loadDatabricksCodexModels(
+  context: AdapterModelDiscoveryContext,
+  options?: { refresh?: boolean },
+): Promise<AdapterModel[]> {
+  if (!context.resolvedCredential || !context.connectionId) {
+    throw unprocessable("Databricks connection is required to list combos");
+  }
+  const { resolvedCredential } = context;
+  return listDatabricksModelServices(
+    {
+      companyId: context.companyId,
+      connectionId: context.connectionId,
+      host: resolvedCredential.host,
+      catalog: resolvedCredential.catalog,
+      schema: resolvedCredential.schema,
+      modelPrefix: resolvedCredential.modelPrefix,
+    },
+    resolvedCredential,
+    { refresh: options?.refresh ?? context.refresh },
+  );
+}
+
+export async function listCodexModels(
+  context?: AdapterModelDiscoveryContext,
+): Promise<AdapterModel[]> {
+  if (context?.provider === "databricks") {
+    return loadDatabricksCodexModels(context);
+  }
   return loadCodexModels();
 }
 
-export async function refreshCodexModels(): Promise<AdapterModel[]> {
+export async function refreshCodexModels(
+  context?: AdapterModelDiscoveryContext,
+): Promise<AdapterModel[]> {
+  if (context?.provider === "databricks") {
+    return loadDatabricksCodexModels(context, { refresh: true });
+  }
   return loadCodexModels({ forceRefresh: true });
 }
 

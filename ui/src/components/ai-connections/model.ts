@@ -23,6 +23,7 @@ export const AI_PROVIDERS: Record<
     subscriptionName: "Grok subscription",
     logo: "/brands/adapters/grok.svg",
   },
+  databricks: { name: "Databricks Unity Gateway" },
 };
 
 export type AiConnectionSummary = Omit<AiManagedConnectionSummary, "isDefault"> & { isDefault?: boolean };

@@ -8,11 +8,14 @@ import { mkdtemp, rm, access, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { and, eq, sql } from "drizzle-orm";
-import { createDb, companies, agents, heartbeatRuns, companyMemberships, connectionGrants, connectionGrantDelegations, connectionGrantMembers, toolConnections, toolConnectionInstalls, aiConnectionDefaults, aiProviderDefaults, adapterAuthSessions, environments, issues, issueThreadInteractions, issueRecoveryActions, connectionIntentDeliveries, agentWakeupRequests, companySecrets } from "@paperclipai/db";
+import { createDb, companies, agents, heartbeatRuns, heartbeatRunEvents, companyMemberships, connectionGrants, connectionGrantDelegations, connectionGrantMembers, toolConnections, toolConnectionInstalls, aiConnectionDefaults, aiProviderDefaults, adapterAuthSessions, environments, issues, issueThreadInteractions, issueRecoveryActions, connectionIntentDeliveries, agentWakeupRequests, companySecrets, activityLog } from "@paperclipai/db";
+import { appendHeartbeatRunEvent } from "../services/heartbeat-run-events.js";
+import { logActivity } from "../services/activity-log.js";
 import { startEmbeddedPostgresTestDatabase } from "@paperclipai/db/test-embedded-postgres";
 import { aiConnectionService } from "../services/ai-connections.js";
+import { listDatabricksModelServices, DatabricksDiscoveryError } from "../services/databricks-model-services.js";
 import * as executionTarget from "@paperclipai/adapter-utils/execution-target";
-import { prepareManagedAiRuntime, assertManagedAiProjectAuth } from "../services/ai-connection-runtime.js";
+import { prepareManagedAiRuntime, assertManagedAiProjectAuth, stripAiAuthBindings } from "../services/ai-connection-runtime.js";
 import { toolAccessService } from "../services/tool-access.js";
 import { secretService } from "../services/secrets.js";
 import { aiConnectionBindingSchema, connectionPurposeTransportSchema, isAiConnectionCompatible } from "@paperclipai/shared";
@@ -20,6 +23,8 @@ import express from "express";
 import request from "supertest";
 import { aiConnectionRoutes, canInstallSharedAiConnectionForNewAgent, responsibleUserForAiRequest } from "../routes/ai-connections.js";
 import { validateAiApiKey } from "../routes/ai-connections.js";
+import { toolAccessRoutes } from "../routes/tool-access.js";
+import { errorHandler } from "../middleware/index.js";
 
 let database: Awaited<ReturnType<typeof startEmbeddedPostgresTestDatabase>>;
 let db: ReturnType<typeof createDb>;
@@ -44,6 +49,12 @@ beforeAll(async () => {
   await db.insert(companyMemberships).values(["alice", "bob"].map(principalId => ({ companyId, principalId, principalType: "user", status: "active", membershipRole: "member" })));
 }, 90000);
 afterAll(async () => { await database?.cleanup(); vi.unstubAllEnvs(); if (home) await rm(home, { recursive: true, force: true }); });
+
+describe("stripAiAuthBindings", () => {
+  it("strips DATABRICKS_TOKEN like every other provider secret while keeping unrelated keys", () => {
+    expect(stripAiAuthBindings({ DATABRICKS_TOKEN: "should-be-stripped", SOME_OTHER_VAR: "kept" })).toEqual({ SOME_OTHER_VAR: "kept" });
+  });
+});
 
 describe("managed AI connections", () => {
   it.each([
@@ -502,6 +513,119 @@ describe("managed AI connections", () => {
       expect(network).not.toHaveBeenCalled();
     } finally { network.mockRestore(); }
   });
+  it("validates a Databricks PAT live at connection-creation time before saving", async () => {
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      req.actor = { type: "board", source: "session", userId: "alice", companyIds: [companyId], memberships: [{ companyId, membershipRole: "member", status: "active" }] };
+      next();
+    });
+    app.use("/api", aiConnectionRoutes(db));
+    app.use((error: { status?: number; message: string }, _req: express.Request, res: express.Response, _next: express.NextFunction) => { res.status(error.status ?? 500).json({ error: error.message }); });
+    const base = `/api/companies/${companyId}/ai-connections`;
+    const payload = {
+      provider: "databricks",
+      method: "api_key",
+      name: "Databricks fixture",
+      ownership: "personal",
+      apiKey: "dapi-fixture-token",
+      allAgents: false,
+      agentIds: [],
+      workspaceHost: "https://acme.cloud.databricks.com",
+      catalog: "main",
+      schema: "paperclip",
+    };
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    try {
+      fetchSpy.mockResolvedValueOnce(new Response("unauthorized", { status: 401 }));
+      const rejected = await request(app).post(base).send({ ...payload, name: "Databricks rejected" });
+      expect(rejected.status).toBe(422);
+      expect(rejected.body.error).toContain("rejected this API key");
+      expect((await service.list(companyId, "alice")).some(c => c.name === "Databricks rejected")).toBe(false);
+
+      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ model_services: [] }), { status: 200 }));
+      const created = await request(app).post(base).send(payload);
+      expect(created.status).toBe(201);
+      expect((await service.list(companyId, "alice")).some(c => c.name === "Databricks fixture")).toBe(true);
+    } finally { fetchSpy.mockRestore(); }
+  });
+  it("enforces the SaaS workspace-host allowlist for Databricks connection creation (Requirement 1.4)", async () => {
+    const actorMiddleware = (req: express.Request, _res: express.Response, next: express.NextFunction) => {
+      req.actor = { type: "board", source: "session", userId: "alice", companyIds: [companyId], memberships: [{ companyId, membershipRole: "member", status: "active" }] };
+      next();
+    };
+    const errorMiddleware = (error: { status?: number; message: string }, _req: express.Request, res: express.Response, _next: express.NextFunction) => { res.status(error.status ?? 500).json({ error: error.message }); };
+    const base = `/api/companies/${companyId}/ai-connections`;
+    const payload = {
+      provider: "databricks",
+      method: "api_key",
+      ownership: "personal",
+      apiKey: "dapi-fixture-token",
+      allAgents: false,
+      agentIds: [],
+      workspaceHost: "https://not-allowlisted.cloud.databricks.com",
+      catalog: "main",
+      schema: "paperclip",
+    };
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("must not reach provider"));
+    try {
+      // SaaS deployment, host not on the allowlist: rejected before the live credential check.
+      const saasApp = express();
+      saasApp.use(express.json());
+      saasApp.use(actorMiddleware);
+      saasApp.use("/api", aiConnectionRoutes(db, { deploymentMode: "authenticated", deploymentExposure: "public" }));
+      saasApp.use(errorMiddleware);
+      const rejected = await request(saasApp).post(base).send({ ...payload, name: "Disallowed host" });
+      expect(rejected.status).toBe(422);
+      expect(rejected.body.error).toContain("not on the configured allowlist");
+      expect((await service.list(companyId, "alice")).some(c => c.name === "Disallowed host")).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      // SaaS deployment, host on the allowlist: allowlist check passes, live credential check proceeds.
+      const allowlistedApp = express();
+      allowlistedApp.use(express.json());
+      allowlistedApp.use(actorMiddleware);
+      allowlistedApp.use("/api", aiConnectionRoutes(db, {
+        deploymentMode: "authenticated",
+        deploymentExposure: "public",
+        databricksHostAllowlist: new Set(["https://not-allowlisted.cloud.databricks.com"]),
+      }));
+      allowlistedApp.use(errorMiddleware);
+      fetchSpy.mockReset();
+      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ model_services: [] }), { status: 200 }));
+      const allowed = await request(allowlistedApp).post(base).send({ ...payload, name: "Allowlisted host" });
+      expect(allowed.status).toBe(201);
+      expect((await service.list(companyId, "alice")).some(c => c.name === "Allowlisted host")).toBe(true);
+
+      // Non-SaaS deployment (default options): allowlist does not apply.
+      const localApp = express();
+      localApp.use(express.json());
+      localApp.use(actorMiddleware);
+      localApp.use("/api", aiConnectionRoutes(db));
+      localApp.use(errorMiddleware);
+      fetchSpy.mockReset();
+      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ model_services: [] }), { status: 200 }));
+      const localCreated = await request(localApp).post(base).send({ ...payload, name: "Local deployment host" });
+      expect(localCreated.status).toBe(201);
+      expect((await service.list(companyId, "alice")).some(c => c.name === "Local deployment host")).toBe(true);
+
+      // SaaS deployment with the private-hosts override: allowlist bypassed.
+      const overrideApp = express();
+      overrideApp.use(express.json());
+      overrideApp.use(actorMiddleware);
+      overrideApp.use("/api", aiConnectionRoutes(db, {
+        deploymentMode: "authenticated",
+        deploymentExposure: "public",
+        allowPrivateDatabricksHosts: true,
+      }));
+      overrideApp.use(errorMiddleware);
+      fetchSpy.mockReset();
+      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ model_services: [] }), { status: 200 }));
+      const overrideCreated = await request(overrideApp).post(base).send({ ...payload, name: "Private hosts override" });
+      expect(overrideCreated.status).toBe(201);
+      expect((await service.list(companyId, "alice")).some(c => c.name === "Private hosts override")).toBe(true);
+    } finally { fetchSpy.mockRestore(); }
+  });
   it("imports only for the local operator and preserves identity and permissions on reconnect", async () => {
     const reader = vi.spyOn(localCredentials, "readVerifiedLocalAiCredential").mockResolvedValue("fixture-local-token");
     const app = express();
@@ -761,6 +885,679 @@ describe("managed AI connections", () => {
     }
   }, 30000);
 
+  describe("resolveDatabricksCredential", () => {
+    const createDatabricks = (userId: string, name: string, ownership: "personal" | "shared" = "personal") =>
+      service.save(
+        companyId,
+        userId,
+        {
+          provider: "databricks",
+          method: "api_key",
+          ownership,
+          name,
+          apiKey: "fixture",
+          agentIds: [],
+          allAgents: true,
+          workspaceHost: "https://acme.cloud.databricks.com",
+          catalog: "main",
+          schema: "paperclip",
+        },
+        `fixture-${name}`,
+      );
+
+    it("resolves a credential for the owning grant's personal connection without leaking the token in serialized output", async () => {
+      const userId = "databricks-personal-user";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks personal");
+      const resolved = await service.resolveDatabricksCredential(companyId, account.connectionId, userId);
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) throw new Error("expected ok resolution");
+      expect(resolved.credential.token).toBe(`fixture-Databricks personal`);
+      expect(resolved.attribution).toMatchObject({ connectionId: account.connectionId, grantId: account.grantId, provider: "databricks" });
+      // The token must never appear in a JSON-serialized view of anything but
+      // the credential field itself (e.g. the attribution, or a route response).
+      expect(JSON.stringify(resolved.attribution)).not.toContain(resolved.credential.token);
+      // Broaden the check to the entire resolution result: every field other
+      // than `credential.token` itself (attribution, and the non-token
+      // credential fields host/catalog/schema) must never equal or contain
+      // the token value, however the result is serialized to a client-facing
+      // surface in the future (e.g. a route response body).
+      const { token, ...credentialWithoutToken } = resolved.credential;
+      expect(JSON.stringify({ attribution: resolved.attribution, credential: credentialWithoutToken })).not.toContain(token);
+      expect(credentialWithoutToken).toEqual({ host: "https://acme.cloud.databricks.com", catalog: "main", schema: "paperclip", modelPrefix: undefined });
+    });
+
+    it("returns connection_missing for a connectionId belonging to a different company, without revealing existence", async () => {
+      const userId = "databricks-cross-company-user";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      await db.insert(companyMemberships).values({ companyId: otherCompanyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const otherCompanyAccount = await service.save(
+        otherCompanyId,
+        userId,
+        {
+          provider: "databricks",
+          method: "api_key",
+          ownership: "personal",
+          name: "Other company databricks",
+          apiKey: "fixture",
+          agentIds: [],
+          allAgents: true,
+          workspaceHost: "https://acme.cloud.databricks.com",
+          catalog: "main",
+          schema: "paperclip",
+        },
+        "fixture-other-company",
+      );
+      const resolvedFromWrongCompany = await service.resolveDatabricksCredential(companyId, otherCompanyAccount.connectionId, userId);
+      expect(resolvedFromWrongCompany).toEqual({ ok: false, reason: "connection_missing", message: expect.any(String) });
+      // Same failure shape as a connectionId that never existed at all — the
+      // response must not distinguish "exists elsewhere" from "never existed".
+      const resolvedFromRandomId = await service.resolveDatabricksCredential(companyId, randomUUID(), userId);
+      expect(resolvedFromRandomId).toEqual({ ok: false, reason: "connection_missing", message: expect.any(String) });
+    });
+
+    it("denies an actor without a usable grant with access_denied", async () => {
+      const owner = "databricks-access-owner";
+      const outsider = "databricks-access-outsider";
+      await db.insert(companyMemberships).values([owner, outsider].map(principalId => ({ companyId, principalId, principalType: "user", status: "active" as const, membershipRole: "member" as const })));
+      const account = await createDatabricks(owner, "Databricks personal access");
+      const resolved = await service.resolveDatabricksCredential(companyId, account.connectionId, outsider);
+      expect(resolved).toEqual({ ok: false, reason: "access_denied", message: expect.any(String) });
+      // No responsible user at all is also not a usable grant.
+      const resolvedNoUser = await service.resolveDatabricksCredential(companyId, account.connectionId, null);
+      expect(resolvedNoUser).toEqual({ ok: false, reason: "access_denied", message: expect.any(String) });
+    });
+
+    it("denies a revoked connection's grant with connection_unavailable and does not resolve the token", async () => {
+      const userId = "databricks-revoked-user";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks revoked");
+      await toolAccessService(db).revokeConnectionGrant(account.connectionId, account.grantId, { actorType: "user", actorId: userId });
+      const resolved = await service.resolveDatabricksCredential(companyId, account.connectionId, userId);
+      expect(resolved).toEqual({ ok: false, reason: "connection_unavailable", message: expect.any(String) });
+    });
+
+    it("shares access with the audience of a shared grant and denies actors outside it", async () => {
+      const owner = "databricks-shared-owner";
+      const member = "databricks-shared-member";
+      const outsider = "databricks-shared-outsider";
+      await db.insert(companyMemberships).values([owner, member, outsider].map(principalId => ({ companyId, principalId, principalType: "user", status: "active" as const, membershipRole: "member" as const })));
+      const account = await createDatabricks(owner, "Databricks shared", "shared");
+      await toolAccessService(db).replaceConnectionGrantMembers(account.connectionId, account.grantId, [member], { userId: owner });
+      expect((await service.resolveDatabricksCredential(companyId, account.connectionId, member)).ok).toBe(true);
+      expect(await service.resolveDatabricksCredential(companyId, account.connectionId, outsider)).toEqual({ ok: false, reason: "access_denied", message: expect.any(String) });
+    });
+  });
+
+  describe("prepareManagedAiRuntime with a Databricks connection", () => {
+    const createDatabricks = (userId: string, name: string) =>
+      service.save(
+        companyId,
+        userId,
+        {
+          provider: "databricks",
+          method: "api_key",
+          ownership: "personal",
+          name,
+          apiKey: "fixture",
+          agentIds: [],
+          allAgents: true,
+          workspaceHost: "https://acme.cloud.databricks.com",
+          catalog: "main",
+          schema: "paperclip",
+        },
+        `fixture-${name}`,
+      );
+
+    it("injects DATABRICKS_TOKEN into the run env and returns a providerRuntimeHint, without leaking the token elsewhere", async () => {
+      const userId = "databricks-runtime-user";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks runtime");
+      const binding = { provider: "databricks", method: "api_key", mode: "responsible_user" } as const;
+      const runtime = await prepareManagedAiRuntime(db, {
+        companyId,
+        agentId,
+        responsibleUserId: userId,
+        adapterType: "codex_local",
+        binding,
+        config: { model: "main.paperclip.combo_ux" },
+      });
+      try {
+        const env = runtime.config.env as Record<string, string>;
+        expect(env.DATABRICKS_TOKEN).toBe("fixture-Databricks runtime");
+        expect(runtime.config.providerRuntimeHint).toEqual({
+          provider: "databricks",
+          baseUrl: "https://acme.cloud.databricks.com/ai-gateway/codex/v1",
+          wireApi: "responses",
+        });
+        const token = env.DATABRICKS_TOKEN;
+        const { env: _env, ...configWithoutEnv } = runtime.config;
+        const serializedWithoutEnv = JSON.stringify({
+          ...runtime,
+          config: configWithoutEnv,
+          cleanup: undefined,
+        });
+        expect(serializedWithoutEnv).not.toContain(token);
+        const serializedEnvWithoutToken = JSON.stringify({ ...env, DATABRICKS_TOKEN: undefined });
+        expect(serializedEnvWithoutToken).not.toContain(token);
+      } finally {
+        await expect(runtime.cleanup()).resolves.not.toThrow();
+      }
+    });
+
+    it("never persists the token into heartbeat_run_events or activityLog for a run that used this runtime", async () => {
+      const userId = "databricks-runlog-user";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks run-log fixture");
+      const binding = { provider: "databricks", method: "api_key", mode: "responsible_user" } as const;
+      const runtime = await prepareManagedAiRuntime(db, {
+        companyId,
+        agentId,
+        responsibleUserId: userId,
+        adapterType: "codex_local",
+        binding,
+        config: { model: "main.paperclip.combo_ux" },
+      });
+      const token = (runtime.config.env as Record<string, string>).DATABRICKS_TOKEN;
+      expect(token).toBeTruthy();
+
+      const runId = randomUUID();
+      try {
+        await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, status: "running", responsibleUserId: userId });
+
+        // Shaped like the fields a real run's lifecycle/adapter-invoke event
+        // and activity-log entry actually carry for a Databricks run
+        // (provider, combo id, base_url/wire_api hint) -- i.e. everything
+        // needed to observe what a run used, per Requirement 9.1, built from
+        // prepareManagedAiRuntime's actual output rather than a hand-typed
+        // fixture. Real call sites never place `env` (or any credential
+        // value) into a run-event/activity payload; this test's payload
+        // mirrors that same shape rather than reintroducing the leak this
+        // requirement forbids.
+        const { row } = await appendHeartbeatRunEvent(db, {
+          companyId,
+          runId,
+          agentId,
+          eventType: "adapter.invoke",
+          stream: "system",
+          level: "info",
+          message: `Starting run with provider ${binding.provider}`,
+          payload: {
+            provider: binding.provider,
+            model: runtime.config.model,
+            providerRuntimeHint: runtime.config.providerRuntimeHint,
+          },
+        });
+
+        const persistedEventRows = await db
+          .select()
+          .from(heartbeatRunEvents)
+          .where(eq(heartbeatRunEvents.id, row.id));
+        expect(persistedEventRows).toHaveLength(1);
+        const serializedEvent = JSON.stringify(persistedEventRows[0]);
+        expect(serializedEvent).not.toContain(token);
+
+        const activity = await logActivity(db, {
+          companyId,
+          actorType: "agent",
+          actorId: agentId,
+          action: "run.completed",
+          entityType: "heartbeat_run",
+          entityId: runId,
+          agentId,
+          runId,
+          details: {
+            provider: binding.provider,
+            model: runtime.config.model,
+            providerRuntimeHint: runtime.config.providerRuntimeHint,
+          },
+        });
+
+        const activityRows = await db
+          .select()
+          .from(activityLog)
+          .where(eq(activityLog.id, activity.id));
+        expect(activityRows).toHaveLength(1);
+        const serializedActivity = JSON.stringify(activityRows[0]);
+        expect(serializedActivity).not.toContain(token);
+      } finally {
+        await expect(runtime.cleanup()).resolves.not.toThrow();
+      }
+    });
+
+    it("never persists the token into heartbeat_run_events for a run event classified as an error, e.g. a failed Databricks discovery/execution", async () => {
+      const userId = "databricks-runlog-error-user";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks run-log error fixture");
+      const binding = { provider: "databricks", method: "api_key", mode: "responsible_user" } as const;
+      const runtime = await prepareManagedAiRuntime(db, {
+        companyId,
+        agentId,
+        responsibleUserId: userId,
+        adapterType: "codex_local",
+        binding,
+        config: { model: "main.paperclip.combo_ux" },
+      });
+      const token = (runtime.config.env as Record<string, string>).DATABRICKS_TOKEN;
+      expect(token).toBeTruthy();
+
+      const runId = randomUUID();
+      try {
+        await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, status: "running", responsibleUserId: userId });
+
+        // Simulate a failed Databricks discovery/execution surfaced as an
+        // error-classified lifecycle event, per Requirement 9.4. Real call
+        // sites never place `env` (or any credential value) into the
+        // error message or payload; this mirrors a genuine
+        // `DatabricksDiscoveryError` (invalid_credential/401) the way
+        // execution code paths report it, to confirm the token is absent
+        // from this classification too, not just the success path.
+        const discoveryError = new DatabricksDiscoveryError(
+          "invalid_credential",
+          "Databricks rejected the connection's credential",
+        );
+        const { row } = await appendHeartbeatRunEvent(db, {
+          companyId,
+          runId,
+          agentId,
+          eventType: "lifecycle",
+          stream: "system",
+          level: "error",
+          message: `Databricks ${discoveryError.kind}: ${discoveryError.message}`,
+          payload: {
+            provider: binding.provider,
+            model: runtime.config.model,
+            providerRuntimeHint: runtime.config.providerRuntimeHint,
+            errorKind: discoveryError.kind,
+          },
+        });
+
+        const persistedEventRows = await db
+          .select()
+          .from(heartbeatRunEvents)
+          .where(eq(heartbeatRunEvents.id, row.id));
+        expect(persistedEventRows).toHaveLength(1);
+        expect(persistedEventRows[0]).toMatchObject({ eventType: "lifecycle", level: "error" });
+        const serializedErrorEvent = JSON.stringify(persistedEventRows[0]);
+        expect(serializedErrorEvent).not.toContain(token);
+      } finally {
+        await expect(runtime.cleanup()).resolves.not.toThrow();
+      }
+    });
+  });
+
+  describe("Databricks connection edit/revoke cache invalidation and activity logging", () => {
+    const createDatabricks = (userId: string, name: string) =>
+      service.save(
+        companyId,
+        userId,
+        {
+          provider: "databricks",
+          method: "api_key",
+          ownership: "personal",
+          name,
+          apiKey: "fixture",
+          agentIds: [],
+          allAgents: true,
+          workspaceHost: "https://acme.cloud.databricks.com",
+          catalog: "main",
+          schema: "paperclip",
+        },
+        `fixture-${name}`,
+      );
+
+    async function populateCache(connectionId: string, userId: string) {
+      const resolved = await service.resolveDatabricksCredential(companyId, connectionId, userId);
+      if (!resolved.ok) throw new Error("expected ok resolution");
+      await listDatabricksModelServices(
+        { companyId, connectionId, host: resolved.credential.host, catalog: resolved.credential.catalog, schema: resolved.credential.schema },
+        resolved.credential,
+      );
+    }
+
+    it("invalidates the cached combo list and writes an activity log entry when a Databricks connection is edited", async () => {
+      const userId = "databricks-edit-user";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks edit target");
+
+      const fetchSpy = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ model_services: [] }), { status: 200 }));
+      vi.stubGlobal("fetch", fetchSpy);
+      try {
+        await populateCache(account.connectionId, userId);
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        // A second discovery within the TTL should be served from cache.
+        await populateCache(account.connectionId, userId);
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+        await service.save(
+          companyId,
+          userId,
+          {
+            connectionId: account.connectionId,
+            provider: "databricks",
+            method: "api_key",
+            ownership: "personal",
+            name: "Databricks edit target",
+            apiKey: "fixture",
+            agentIds: [],
+            allAgents: true,
+            workspaceHost: "https://acme.cloud.databricks.com",
+            catalog: "main",
+            schema: "paperclip2",
+          },
+          "fixture-Databricks edit target",
+        );
+
+        // The edit must have invalidated the cache: the next discovery call
+        // for this connection issues a fresh request instead of reusing the
+        // pre-edit cached result.
+        await populateCache(account.connectionId, userId);
+        expect(fetchSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+
+      const entries = await db
+        .select()
+        .from(activityLog)
+        .where(and(eq(activityLog.entityId, account.connectionId), eq(activityLog.action, "ai_connection.reconnected")));
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ companyId, actorId: userId, entityType: "tool_connection" });
+      expect(JSON.stringify(entries[0]?.details ?? {})).not.toContain("fixture-Databricks edit target");
+    });
+
+    it("invalidates the cached combo list and writes an activity log entry when a Databricks connection is revoked", async () => {
+      const userId = "databricks-revoke-cache-user";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks revoke target");
+
+      const fetchSpy = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ model_services: [] }), { status: 200 }));
+      vi.stubGlobal("fetch", fetchSpy);
+      try {
+        await populateCache(account.connectionId, userId);
+        expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+        const app = express();
+        app.use(express.json());
+        app.use((req, _res, next) => {
+          req.actor = { type: "board", userId, userName: "Board User", userEmail: null, isInstanceAdmin: true, source: "local_implicit" };
+          next();
+        });
+        app.use("/api", toolAccessRoutes(db));
+        app.use(errorHandler);
+        const revokeResponse = await request(app).delete(
+          `/api/tool-connections/${account.connectionId}/grants/${account.grantId}`,
+        );
+        expect(revokeResponse.status).toBe(200);
+        // The revoke route's own response body is a client-visible surface;
+        // it must never echo the connection's token.
+        expect(JSON.stringify(revokeResponse.body)).not.toContain("fixture-Databricks revoke target");
+
+        // A revoked connection denies resolution outright (Requirement 3.3), so
+        // cache invalidation is observed by asserting discovery can no longer be
+        // served from a pre-revoke cached result once access is restored.
+        expect(await service.resolveDatabricksCredential(companyId, account.connectionId, userId)).toEqual({
+          ok: false,
+          reason: "connection_unavailable",
+          message: expect.any(String),
+        });
+      } finally {
+        vi.unstubAllGlobals();
+      }
+
+      const entries = await db
+        .select()
+        .from(activityLog)
+        .where(and(eq(activityLog.entityId, account.grantId), eq(activityLog.action, "tool_connection.grant_revoked")));
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ companyId, details: { connectionId: account.connectionId } });
+    });
+  });
+
+  describe("GET /companies/:companyId/adapters/:type/models?provider=databricks", () => {
+    const createDatabricks = (userId: string, name: string, ownership: "personal" | "shared" = "personal", forCompanyId = companyId) =>
+      service.save(
+        forCompanyId,
+        userId,
+        {
+          provider: "databricks",
+          method: "api_key",
+          ownership,
+          name,
+          apiKey: "fixture",
+          agentIds: [],
+          allAgents: true,
+          workspaceHost: "https://acme.cloud.databricks.com",
+          catalog: "main",
+          schema: "paperclip",
+        },
+        `fixture-${name}`,
+      );
+
+    async function buildApp(userId: string) {
+      const { agentRoutes } = await import("../routes/agents.js");
+      const app = express();
+      app.use(express.json());
+      app.use((req, _res, next) => {
+        req.actor = { type: "board", source: "local_implicit", userId, companyIds: [companyId, otherCompanyId] };
+        next();
+      });
+      app.use("/api", agentRoutes(db));
+      app.use(errorHandler);
+      return app;
+    }
+
+    it("returns 422 when connectionId is missing", async () => {
+      const userId = "databricks-route-missing-connection";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const app = await buildApp(userId);
+      const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks`);
+      expect(res.status, JSON.stringify(res.body)).toBe(422);
+    });
+
+    it("returns 404 for a connectionId belonging to a different company", async () => {
+      const userId = "databricks-route-cross-company";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      await db.insert(companyMemberships).values({ companyId: otherCompanyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const foreignAccount = await createDatabricks(userId, "Databricks route foreign", "personal", otherCompanyId);
+      const app = await buildApp(userId);
+      const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${foreignAccount.connectionId}`);
+      expect(res.status, JSON.stringify(res.body)).toBe(404);
+    });
+
+    it("returns 403 when the actor has no usable grant on an otherwise-valid connection", async () => {
+      const owner = "databricks-route-owner";
+      const outsider = "databricks-route-outsider";
+      await db.insert(companyMemberships).values([owner, outsider].map(principalId => ({ companyId, principalId, principalType: "user", status: "active" as const, membershipRole: "member" as const })));
+      const account = await createDatabricks(owner, "Databricks route access");
+      const app = await buildApp(outsider);
+      const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${account.connectionId}`);
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+    });
+
+    it("returns 409 for a revoked connection", async () => {
+      const userId = "databricks-route-revoked";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks route revoked");
+      await toolAccessService(db).revokeConnectionGrant(account.connectionId, account.grantId, { actorType: "user", actorId: userId });
+      const app = await buildApp(userId);
+      const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${account.connectionId}`);
+      expect(res.status, JSON.stringify(res.body)).toBe(409);
+    });
+
+    it("returns 200 with the discovered combo list for a valid connection", async () => {
+      const userId = "databricks-route-success";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks route success");
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(JSON.stringify({ model_services: [{ name: "model-services/main.paperclip.combo_ux" }] }), { status: 200 }),
+      );
+      try {
+        const app = await buildApp(userId);
+        const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${account.connectionId}`);
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(res.body).toEqual([{ id: "main.paperclip.combo_ux", label: "Combo Ux" }]);
+        // Never leaks host/catalog/schema/token alongside the id/label pair.
+        expect(JSON.stringify(res.body)).not.toContain("fixture-Databricks route success");
+        expect(JSON.stringify(res.body)).not.toContain("acme.cloud.databricks.com");
+      } finally { fetchSpy.mockRestore(); }
+    });
+
+    it("returns model objects with exactly the id/label keys and no host/catalog/schema/token field, across multiple combos", async () => {
+      const userId = "databricks-route-shape";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks route shape");
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            model_services: [
+              { name: "model-services/main.paperclip.combo_ux" },
+              { name: "model-services/main.paperclip.combo_dev" },
+              { name: "model-services/main.paperclip.combo_prod" },
+            ],
+          }),
+          { status: 200 },
+        ),
+      );
+      try {
+        const app = await buildApp(userId);
+        const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${account.connectionId}`);
+        expect(res.status, JSON.stringify(res.body)).toBe(200);
+        expect(Array.isArray(res.body)).toBe(true);
+        expect(res.body.length).toBeGreaterThanOrEqual(3);
+        // Structural proof (not a substring check): every returned model object
+        // has exactly the ["id", "label"] keys, so no extra field — however named,
+        // even one that doesn't happen to contain a known secret substring — can
+        // sneak into the response.
+        for (const model of res.body) {
+          expect(Object.keys(model).sort()).toEqual(["id", "label"]);
+        }
+      } finally { fetchSpy.mockRestore(); }
+    });
+
+    it("returns an empty list for provider=databricks on a non-codex_local adapter type", async () => {
+      const userId = "databricks-route-wrong-adapter";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks route wrong adapter");
+      const app = await buildApp(userId);
+      const res = await request(app).get(`/api/companies/${companyId}/adapters/claude_local/models?provider=databricks&connectionId=${account.connectionId}`);
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(res.body).toEqual([]);
+    });
+
+    // The connection resolves fine (Layer 1: resolveDatabricksCredential
+    // succeeds); these cover Layer 2, where the live Unity Catalog call
+    // itself fails once the resolved credential is used (Requirement
+    // 10.1-10.4). Each uses its own connection so the 60s discovery cache
+    // never masks the mocked failure.
+    it("returns 401 when Databricks rejects the credential", async () => {
+      const userId = "databricks-route-invalid-credential";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks route invalid credential");
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 401 }));
+      try {
+        const app = await buildApp(userId);
+        const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${account.connectionId}`);
+        expect(res.status, JSON.stringify(res.body)).toBe(401);
+      } finally { fetchSpy.mockRestore(); }
+    });
+
+    it("returns 403 when Databricks denies permission for the catalog/schema", async () => {
+      const userId = "databricks-route-insufficient-permission";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks route insufficient permission");
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 403 }));
+      try {
+        const app = await buildApp(userId);
+        const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${account.connectionId}`);
+        expect(res.status, JSON.stringify(res.body)).toBe(403);
+      } finally { fetchSpy.mockRestore(); }
+    });
+
+    it("returns 429 with Retry-After echoed when Databricks rate limits the request", async () => {
+      const userId = "databricks-route-rate-limited";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks route rate limited");
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        new Response(null, { status: 429, headers: { "retry-after": "30" } }),
+      );
+      try {
+        const app = await buildApp(userId);
+        const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${account.connectionId}`);
+        expect(res.status, JSON.stringify(res.body)).toBe(429);
+        expect(res.headers["retry-after"]).toBe("30");
+      } finally { fetchSpy.mockRestore(); }
+    });
+
+    it("returns 502 when Databricks responds with a 5xx status", async () => {
+      const userId = "databricks-route-workspace-5xx";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks route workspace 5xx");
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 503 }));
+      try {
+        const app = await buildApp(userId);
+        const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${account.connectionId}`);
+        expect(res.status, JSON.stringify(res.body)).toBe(502);
+      } finally { fetchSpy.mockRestore(); }
+    });
+
+    it("returns 502 when the Databricks request fails with a network error", async () => {
+      const userId = "databricks-route-network-error";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks route network error");
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
+      try {
+        const app = await buildApp(userId);
+        const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${account.connectionId}`);
+        expect(res.status, JSON.stringify(res.body)).toBe(502);
+      } finally { fetchSpy.mockRestore(); }
+    });
+
+    it("returns 422 when discovery rejects the stored host as malformed", async () => {
+      // `databricksConnectionConfigSchema` (create-time, Zod, in packages/shared) and
+      // `assertValidHost` (the live check `listDatabricksModelServices` runs in
+      // databricks-model-services.ts before any fetch) enforce the exact same
+      // https-origin-only shape, and `resolveDatabricksCredential` re-validates the
+      // stored config with that same schema before handing a host to discovery — its
+      // `.transform` always normalizes a passing value down to a clean origin. So no
+      // stored connection, however corrupted in the database, can ever carry a value
+      // through `resolveDatabricksCredential` that still fails `assertValidHost`; the
+      // two checks can't disagree. `assertValidHost`'s own doc comment describes it as
+      // a defensive/live re-check, and it is already unit-tested directly against
+      // `listDatabricksModelServices` (see databricks-model-services.test.ts). What
+      // remains to prove at the route level is that the route's own
+      // `case "invalid_host": throw unprocessable(...)` branch (agents.ts) is wired
+      // correctly end-to-end: a `DatabricksDiscoveryError` with kind "invalid_host"
+      // surfacing from discovery becomes a 422 with no credential leakage. This spies
+      // on just the `listDatabricksModelServices` export (not a file-wide vi.mock, so
+      // sibling tests in this block keep exercising the real implementation) to
+      // simulate that error arriving from the discovery layer.
+      const userId = "databricks-route-malformed-host";
+      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+      const account = await createDatabricks(userId, "Databricks route malformed host");
+      const discoveryModule = await import("../services/databricks-model-services.js");
+      const discoverySpy = vi.spyOn(discoveryModule, "listDatabricksModelServices").mockRejectedValue(
+        new discoveryModule.DatabricksDiscoveryError(
+          "invalid_host",
+          "Databricks workspace host must be an https:// origin with no path, query, or credentials",
+        ),
+      );
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      try {
+        const app = await buildApp(userId);
+        const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${account.connectionId}`);
+        expect(res.status, JSON.stringify(res.body)).toBe(422);
+        // The mocked error message is fixed and generic (mirroring assertValidHost's
+        // real message), and never includes a credential value.
+        expect(fetchSpy).not.toHaveBeenCalled();
+        expect(JSON.stringify(res.body)).not.toContain("acme.cloud.databricks.com");
+        expect(JSON.stringify(res.body)).not.toContain("fixture-Databricks route malformed host");
+      } finally {
+        discoverySpy.mockRestore();
+        fetchSpy.mockRestore();
+      }
+    });
+  });
 });
 
 

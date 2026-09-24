@@ -827,6 +827,258 @@ describe("AgentConfigForm environment selector", () => {
     expect(effortChoices).not.toContain("Minimalminimal");
   });
 
+  it("relabels the model field as Combo when the effective connection provider is databricks", async () => {
+    mockAgentsApi.adapterModels.mockResolvedValue([
+      { id: "main.paperclip.combo_ux", label: "Combo UX" },
+    ]);
+    const result = await renderForm(
+      [makeEnvironment({ id: "local-1", name: "Local", driver: "local" })],
+      {
+        adapterConfig: { model: "main.paperclip.combo_ux" },
+        runtimeConfig: {
+          aiConnection: {
+            provider: "databricks",
+            method: "api_key",
+            mode: "shared",
+            connectionId: "11111111-1111-4111-8111-111111111111",
+            grantId: "22222222-2222-4222-8222-222222222222",
+          },
+        },
+      },
+    );
+    roots.push(result.root);
+
+    const labels = Array.from(result.container.querySelectorAll("label")).map((label) =>
+      label.textContent?.trim(),
+    );
+    expect(labels).toContain("Combo");
+    expect(labels).not.toContain("Model");
+  });
+
+  it("keeps the model field labeled Model for a non-databricks connection", async () => {
+    mockAgentsApi.adapterModels.mockResolvedValue([
+      { id: "gpt-5.6-sol", label: "gpt-5.6-sol" },
+    ]);
+    const result = await renderForm(
+      [makeEnvironment({ id: "local-1", name: "Local", driver: "local" })],
+      { adapterConfig: { model: "gpt-5.6-sol" } },
+    );
+    roots.push(result.root);
+
+    const labels = Array.from(result.container.querySelectorAll("label")).map((label) =>
+      label.textContent?.trim(),
+    );
+    expect(labels).toContain("Model");
+    expect(labels).not.toContain("Combo");
+  });
+
+  it("renders a valid databricks combo normally with no Unavailable badge and Save enabled", async () => {
+    mockAgentsApi.adapterModels.mockResolvedValue([
+      { id: "main.paperclip.combo_ux", label: "Combo UX" },
+    ]);
+    const result = await renderForm(
+      [makeEnvironment({ id: "local-1", name: "Local", driver: "local" })],
+      {
+        adapterConfig: { model: "main.paperclip.combo_ux" },
+        runtimeConfig: {
+          aiConnection: {
+            provider: "databricks",
+            method: "api_key",
+            mode: "shared",
+            connectionId: "11111111-1111-4111-8111-111111111111",
+            grantId: "22222222-2222-4222-8222-222222222222",
+          },
+        },
+      },
+    );
+    roots.push(result.root);
+
+    const labels = Array.from(result.container.querySelectorAll("label")).map((label) =>
+      label.textContent?.trim(),
+    );
+    expect(labels).toContain("Combo");
+
+    const modelButton = Array.from(result.container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Combo UX");
+    expect(modelButton).not.toBeUndefined();
+    await act(async () => {
+      modelButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+    expect(document.body.textContent).not.toContain("Unavailable");
+    await act(async () => {
+      modelButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    // Make the form dirty via an unrelated field so the Save button renders,
+    // then confirm it is enabled (the saved combo is still valid).
+    const nameInput = result.container.querySelector<HTMLInputElement>('input[placeholder="Agent name"]');
+    expect(nameInput).toBeTruthy();
+    setInputValue(nameInput!, "Cody renamed");
+    await flushReact();
+
+    const saveButton = findButton(result.container, "Save");
+    expect(saveButton).toBeTruthy();
+    expect(saveButton!.disabled).toBe(false);
+  });
+
+  it("renders an Unavailable badge and blocks Save when the saved combo is missing from discovery", async () => {
+    mockAgentsApi.adapterModels.mockResolvedValue([
+      { id: "main.paperclip.combo_other", label: "Combo Other" },
+    ]);
+    const result = await renderForm(
+      [makeEnvironment({ id: "local-1", name: "Local", driver: "local" })],
+      {
+        adapterConfig: { model: "main.paperclip.combo_gone" },
+        runtimeConfig: {
+          aiConnection: {
+            provider: "databricks",
+            method: "api_key",
+            mode: "shared",
+            connectionId: "11111111-1111-4111-8111-111111111111",
+            grantId: "22222222-2222-4222-8222-222222222222",
+          },
+        },
+      },
+    );
+    roots.push(result.root);
+
+    expect(result.container.textContent).toContain("main.paperclip.combo_gone");
+
+    const modelButton = Array.from(result.container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "main.paperclip.combo_gone");
+    expect(modelButton).not.toBeUndefined();
+    await act(async () => {
+      modelButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    const unavailableEntry = Array.from(document.body.querySelectorAll("button"))
+      .find((button) => !result.container.contains(button) && button.textContent?.includes("main.paperclip.combo_gone"));
+    expect(unavailableEntry).not.toBeUndefined();
+    expect(unavailableEntry!.textContent).toContain("Unavailable");
+    expect(unavailableEntry!.disabled).toBe(true);
+    await act(async () => {
+      modelButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    const nameInput = result.container.querySelector<HTMLInputElement>('input[placeholder="Agent name"]');
+    expect(nameInput).toBeTruthy();
+    setInputValue(nameInput!, "Cody renamed");
+    await flushReact();
+
+    const saveButton = findButton(result.container, "Save");
+    expect(saveButton).toBeTruthy();
+    expect(saveButton!.disabled).toBe(true);
+  });
+
+  it("keeps the original green current badge for a non-databricks unknown model (regression guard)", async () => {
+    mockAgentsApi.adapterModels.mockResolvedValue([
+      { id: "gpt-5.6-sol", label: "gpt-5.6-sol" },
+    ]);
+    const result = await renderForm(
+      [makeEnvironment({ id: "local-1", name: "Local", driver: "local" })],
+      { adapterConfig: { model: "gpt-legacy-removed" } },
+    );
+    roots.push(result.root);
+
+    expect(result.container.textContent).toContain("gpt-legacy-removed");
+
+    const modelButton = Array.from(result.container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "gpt-legacy-removed");
+    expect(modelButton).not.toBeUndefined();
+    await act(async () => {
+      modelButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    const currentEntry = Array.from(document.body.querySelectorAll("button"))
+      .find((button) => !result.container.contains(button) && button.textContent?.includes("gpt-legacy-removed"));
+    expect(currentEntry).not.toBeUndefined();
+    expect(currentEntry!.textContent).toContain("current");
+    expect(currentEntry!.textContent).not.toContain("Unavailable");
+    expect(currentEntry!.disabled).toBe(false);
+    await act(async () => {
+      modelButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    const nameInput = result.container.querySelector<HTMLInputElement>('input[placeholder="Agent name"]');
+    expect(nameInput).toBeTruthy();
+    setInputValue(nameInput!, "Cody renamed");
+    await flushReact();
+
+    const saveButton = findButton(result.container, "Save");
+    expect(saveButton).toBeTruthy();
+    expect(saveButton!.disabled).toBe(false);
+  });
+
+  it("renders exactly the Databricks discovery response in the combo dropdown, with no OpenAI models mixed in", async () => {
+    // Requirement 4.4: the combo dropdown's data source must be exactly the
+    // single-provider server response for the Databricks case — no merging
+    // with any other model list (e.g. a hardcoded OpenAI id).
+    mockAgentsApi.adapterModels.mockResolvedValue([
+      { id: "main.paperclip.combo_ux", label: "Combo UX" },
+      { id: "main.paperclip.combo_support", label: "Combo Support" },
+    ]);
+    const result = await renderForm(
+      [makeEnvironment({ id: "local-1", name: "Local", driver: "local" })],
+      {
+        adapterConfig: { model: "main.paperclip.combo_ux" },
+        runtimeConfig: {
+          aiConnection: {
+            provider: "databricks",
+            method: "api_key",
+            mode: "shared",
+            connectionId: "11111111-1111-4111-8111-111111111111",
+            grantId: "22222222-2222-4222-8222-222222222222",
+          },
+        },
+      },
+    );
+    roots.push(result.root);
+
+    // Confirm the adapterModels call that feeds the dropdown was scoped to the
+    // Databricks provider/connection, not a generic/OpenAI request.
+    expect(mockAgentsApi.adapterModels).toHaveBeenCalledWith(
+      "company-1",
+      "codex_local",
+      expect.objectContaining({ provider: "databricks", connectionId: "11111111-1111-4111-8111-111111111111" }),
+    );
+
+    const modelButton = Array.from(result.container.querySelectorAll("button"))
+      .find((button) => button.textContent?.trim() === "Combo UX");
+    expect(modelButton).not.toBeUndefined();
+    await act(async () => {
+      modelButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    // The popover portals outside `result.container`. Enumerate every
+    // rendered model-list entry button (the search input's sibling list) and
+    // confirm the set of visible model ids/labels is EXACTLY the mocked
+    // Databricks response — nothing more, nothing less. In particular, no
+    // hardcoded OpenAI model id (e.g. "gpt-5.6-sol") may appear alongside it.
+    const popoverButtons = Array.from(document.body.querySelectorAll("button"))
+      .filter((button) => !result.container.contains(button));
+    const renderedTexts = popoverButtons.map((button) => button.textContent?.trim() ?? "");
+
+    expect(renderedTexts.some((text) => text.includes("Combo UX"))).toBe(true);
+    expect(renderedTexts.some((text) => text.includes("Combo Support"))).toBe(true);
+    // No OpenAI/other-provider model id leaked into the same rendered list.
+    expect(renderedTexts.some((text) => text.includes("gpt-5.6-sol"))).toBe(false);
+    expect(renderedTexts.some((text) => text.includes("gpt-6-astra"))).toBe(false);
+    expect(document.body.textContent).not.toContain("gpt-5.6-sol");
+    expect(document.body.textContent).not.toContain("gpt-6-astra");
+
+    await act(async () => {
+      modelButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+  });
+
   it("removes a legacy incompatible effort when the model changes to Astra", async () => {
     mockAgentsApi.adapterModels.mockResolvedValue([
       { id: "gpt-5.6-sol", label: "gpt-5.6-sol" },

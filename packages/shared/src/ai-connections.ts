@@ -31,6 +31,7 @@ export const AI_PROVIDERS = [
   "openai",
   "openrouter",
   "xai",
+  "databricks",
 ] as const;
 export const aiProviderSchema = z.enum(AI_PROVIDERS);
 export const aiAuthMethodSchema = z.enum(["subscription", "api_key"]);
@@ -107,7 +108,52 @@ export const AI_CONNECTION_CAPABILITIES: Record<
       api_key: { adapters: ["grok_local"], envKey: "XAI_API_KEY" },
     },
   },
+  databricks: {
+    name: "Databricks Unity Gateway",
+    methods: {
+      api_key: { adapters: ["codex_local"], envKey: "DATABRICKS_TOKEN" },
+    },
+  },
 };
+/** Origin-only, https-only workspace host: no userinfo, path, query, or fragment. */
+const databricksWorkspaceHostSchema = z.preprocess(
+  (value) => (typeof value === "string" ? value.trim() : value),
+  z.string().url().superRefine((value, ctx) => {
+    let url: URL;
+    try {
+      url = new URL(value);
+    } catch {
+      return;
+    }
+    const hasPath = url.pathname !== "" && url.pathname !== "/";
+    if (
+      url.protocol !== "https:" ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      hasPath
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "Workspace host must be an origin-only https:// URL without credentials, path, query, or fragment",
+      });
+    }
+  }).transform((value) => new URL(value).origin),
+);
+
+/** Non-secret Databricks AI Connection settings, stored in the connection's `config` column. */
+export const databricksConnectionConfigSchema = z.object({
+  workspaceHost: databricksWorkspaceHostSchema,
+  catalog: z.string().trim().min(1).max(128),
+  schema: z.string().trim().min(1).max(128),
+  modelPrefix: z.string().trim().min(1).max(128).optional(),
+}).strict();
+export type DatabricksConnectionConfig = z.infer<
+  typeof databricksConnectionConfigSchema
+>;
+
 export function isAiConnectionCompatible(
   requirement: AiConnectionMetadata | AiConnectionBinding,
   adapterType: string,
@@ -181,6 +227,13 @@ export const createAiConnectionSchema = z
     connectionId: z.string().uuid().optional(),
     agentIds: z.array(z.string().uuid()).max(1000).default([]),
     allAgents: z.boolean().default(false),
+    // Databricks-specific connection configuration (see `databricksConnectionConfigSchema`).
+    // Optional at the object level and required only for `provider: "databricks"` so every
+    // other provider's payload shape stays unchanged.
+    workspaceHost: databricksWorkspaceHostSchema.optional(),
+    catalog: z.string().trim().min(1).max(128).optional(),
+    schema: z.string().trim().min(1).max(128).optional(),
+    modelPrefix: z.string().trim().min(1).max(128).optional(),
   })
   .strict()
   .superRefine((v, ctx) => {
@@ -196,6 +249,20 @@ export const createAiConnectionSchema = z
         message:
           "Provide exactly the credential for the selected sign-in method",
       });
+    }
+    if (v.provider === "databricks") {
+      if (v.method !== "api_key")
+        ctx.addIssue({
+          code: "custom",
+          message: "Databricks connections only support the api_key sign-in method",
+          path: ["method"],
+        });
+      if (!v.workspaceHost)
+        ctx.addIssue({ code: "custom", message: "Workspace host is required", path: ["workspaceHost"] });
+      if (!v.catalog)
+        ctx.addIssue({ code: "custom", message: "Catalog is required", path: ["catalog"] });
+      if (!v.schema)
+        ctx.addIssue({ code: "custom", message: "Schema is required", path: ["schema"] });
     }
   });
 export type CreateAiConnection = z.infer<typeof createAiConnectionSchema>;

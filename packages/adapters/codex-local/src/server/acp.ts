@@ -46,6 +46,7 @@ import {
   resolveSharedCodexHomeDir,
   stageCodexHomeForSync,
 } from "./codex-home.js";
+import { readDatabricksProviderRuntimeHint } from "./databricks-provider-runtime.js";
 import { ADAPTER_AUTH_MISSING_CHECK_CODE } from "./auth-check.js";
 
 const moduleDir = path.dirname(fileURLToPath(import.meta.url));
@@ -556,11 +557,21 @@ export async function testCodexAcpEnvironment(
         : null;
     const configuredApiKey = configApiKey ?? hostApiKey;
     const configuredCodexHome = isNonEmpty(envConfig.CODEX_HOME) ? envConfig.CODEX_HOME : null;
+    // Databricks readiness: derive `activeProvider`/`configuredDatabricksToken`
+    // the same way `execute.ts` does for the CLI/exec path, so an agent whose
+    // resolved AI Connection binding is Databricks reports ready here too when
+    // its DATABRICKS_TOKEN is set, without requiring OPENAI_API_KEY.
+    const providerRuntimeHint = readDatabricksProviderRuntimeHint(config);
+    const configuredDatabricksToken = isNonEmpty(envConfig.DATABRICKS_TOKEN)
+      ? envConfig.DATABRICKS_TOKEN
+      : null;
     const credentialReadiness = await evaluateCodexCredentialReadiness({
       env: process.env,
       companyId: ctx.companyId,
       configuredCodexHome,
       configuredApiKey,
+      activeProvider: providerRuntimeHint?.provider,
+      configuredDatabricksToken,
     });
 
     if (credentialReadiness.ready && credentialReadiness.authMode === "api") {
@@ -576,6 +587,13 @@ export async function testCodexAcpEnvironment(
         level: "info",
         message: "Codex ACP will use an externally managed CODEX_HOME.",
         detail: credentialReadiness.effectiveHome,
+      });
+    } else if (credentialReadiness.ready && credentialReadiness.authMode === "databricks") {
+      checks.push({
+        code: "codex_acp_native_auth_detected",
+        level: "info",
+        message: "Codex ACP can authenticate through the Databricks Unity Gateway.",
+        detail: "DATABRICKS_TOKEN is set for this run; OPENAI_API_KEY is not required.",
       });
     } else if (credentialReadiness.ready) {
       checks.push({
@@ -598,13 +616,30 @@ export async function testCodexAcpEnvironment(
     // environment is not seeded, so only the adapter config key counts here.
     const configApiKey = isNonEmpty(envConfig.OPENAI_API_KEY) ? envConfig.OPENAI_API_KEY : null;
     const configuredCodexHome = isNonEmpty(envConfig.CODEX_HOME) ? envConfig.CODEX_HOME : null;
+    // Databricks readiness: same derivation as the non-remote branch above.
+    // The sandbox is not seeded with the host's OPENAI_API_KEY, but a
+    // Databricks-active run authenticates via DATABRICKS_TOKEN regardless of
+    // execution target, so it is derived here the same way.
+    const providerRuntimeHint = readDatabricksProviderRuntimeHint(config);
+    const configuredDatabricksToken = isNonEmpty(envConfig.DATABRICKS_TOKEN)
+      ? envConfig.DATABRICKS_TOKEN
+      : null;
     const credentialReadiness = await evaluateCodexCredentialReadiness({
       env: process.env,
       companyId: ctx.companyId,
       configuredCodexHome,
       configuredApiKey: configApiKey,
+      activeProvider: providerRuntimeHint?.provider,
+      configuredDatabricksToken,
     });
-    if (!credentialReadiness.ready) {
+    if (credentialReadiness.ready && credentialReadiness.authMode === "databricks") {
+      checks.push({
+        code: "codex_acp_native_auth_detected",
+        level: "info",
+        message: "Codex ACP can authenticate through the Databricks Unity Gateway.",
+        detail: "DATABRICKS_TOKEN is set for this run; OPENAI_API_KEY is not required.",
+      });
+    } else if (!credentialReadiness.ready) {
       // Emit the neutral canonical check so the user interface can decide login
       // eligibility from a stable code. The user interface does not read the
       // message text or the top-level status.

@@ -278,4 +278,43 @@ describe("buildCodexExecArgs", () => {
     expect(args).toEqual(["exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "-"]);
   });
 
+  it("passes a Databricks combo id through as --model verbatim, with no re-normalization", () => {
+    const result = buildCodexExecArgs({ model: "main.paperclip.combo_ux" });
+
+    expect(result.model).toBe("main.paperclip.combo_ux");
+    const modelFlagIndex = result.args.indexOf("--model");
+    expect(modelFlagIndex).toBeGreaterThanOrEqual(0);
+    expect(result.args.slice(modelFlagIndex, modelFlagIndex + 2)).toEqual([
+      "--model",
+      "main.paperclip.combo_ux",
+    ]);
+    expect(result.args).toEqual([
+      "exec",
+      "--json",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--model",
+      "main.paperclip.combo_ux",
+      "-",
+    ]);
+  });
+
+  it("does not alias a combo id merely because it contains the gpt-5.6 alias key as a substring", () => {
+    // normalizeCodexModel does an exact map lookup on the whole trimmed string, not a substring
+    // replace. A combo id containing "gpt-5.6" as a fragment (e.g. a user-chosen combo name) must
+    // not be rewritten to gpt-5.6-sol the way the bare alias "gpt-5.6" is.
+    const comboId = "main.paperclip.combo_gpt-5.6";
+    const result = buildCodexExecArgs({ model: comboId });
+
+    expect(result.model).toBe(comboId);
+    expect(result.model).not.toBe("gpt-5.6-sol");
+    expect(result.args).toEqual([
+      "exec",
+      "--json",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--model",
+      comboId,
+      "-",
+    ]);
+  });
+
 });

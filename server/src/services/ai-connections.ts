@@ -21,17 +21,39 @@ import {
   AI_CONNECTION_CAPABILITIES,
   aiConnectionMetadataSchema,
   aiSubscriptionNeedsIsolatedLogin,
+  databricksConnectionConfigSchema,
   isAiConnectionCompatible,
   type AiConnectionBinding,
   type AiConnectionAttribution,
   type AiConnectionMetadata,
+  type AiConnectionUnavailableReason,
   type AiManagedConnectionSummary,
   type CreateAiConnection,
   type AiConnectionLoginIntent,
 } from "@paperclipai/shared";
 import { forbidden, notFound, unprocessable } from "../errors.js";
 import { logActivity } from "./activity-log.js";
+import { invalidateDatabricksModelServiceCache } from "./databricks-model-services.js";
 import { secretService } from "./secrets.js";
+
+/** Resolved, server-side-only Databricks credential for one connection. Never
+ * serialize `token` back to a caller that might reach the client. */
+export interface DatabricksCredentialResolution {
+  ok: true;
+  credential: {
+    token: string;
+    host: string;
+    catalog: string;
+    schema: string;
+    modelPrefix?: string;
+  };
+  attribution: AiConnectionAttribution;
+}
+export interface DatabricksCredentialResolutionFailure {
+  ok: false;
+  reason: AiConnectionUnavailableReason;
+  message: string;
+}
 
 /** Same human audience displayed by the existing Connections identity controls. */
 function canUseCredential(
@@ -373,7 +395,13 @@ export function aiConnectionService(db: Db) {
       } satisfies AiConnectionAttribution,
     };
   }
-  async function credential(row: Awaited<ReturnType<typeof select>>) {
+  // Only reads `connection`/`grant` below, never `attribution` — narrowed to
+  // exactly what it uses (rather than the full `select()` return shape) so
+  // `resolveDatabricksCredential`'s `{ connection, grant }` row (sourced from
+  // `rows()`, which has no `attribution`) satisfies this parameter without
+  // fabricating a fake attribution value. `select()`'s full return type still
+  // structurally satisfies this narrower type, so its call site is unaffected.
+  async function credential(row: Pick<Awaited<ReturnType<typeof select>>, "connection" | "grant">) {
     const ref = row.grant.credentialSecretRefs.find(
       (r) => r.configPath === "ai.credential",
     );
@@ -426,6 +454,94 @@ export function aiConnectionService(db: Db) {
       "latest",
       context,
     );
+  }
+  /**
+   * Resolves and authorizes a Databricks connection/grant for discovery or
+   * execution. Every branch scopes the connection lookup by `companyId`
+   * first, so a `connectionId` belonging to a different company is
+   * indistinguishable from a nonexistent one — it never reveals that the
+   * connection exists elsewhere. The resolved token is only ever returned
+   * to server-side callers that inject it into a child process environment;
+   * it must never be serialized into an HTTP response.
+   */
+  async function resolveDatabricksCredential(
+    companyId: string,
+    connectionId: string,
+    userId: string | null,
+  ): Promise<DatabricksCredentialResolution | DatabricksCredentialResolutionFailure> {
+    const row = (await rows(companyId)).find((r) => r.connection.id === connectionId);
+    if (!row)
+      return { ok: false, reason: "connection_missing", message: "Connection not found" };
+    const { connection, grant } = row;
+    const metadata = aiConnectionMetadataSchema.safeParse(connection.config.ai);
+    if (!metadata.success || metadata.data.provider !== "databricks")
+      return {
+        ok: false,
+        reason: "incompatible",
+        message: "Connection is not a Databricks connection",
+      };
+    const audience = await db
+      .select()
+      .from(connectionGrantMembers)
+      .where(
+        and(
+          eq(connectionGrantMembers.companyId, companyId),
+          eq(connectionGrantMembers.grantId, grant.id),
+        ),
+      );
+    if (!canUseCredential(grant, userId, audience))
+      return {
+        ok: false,
+        reason: "access_denied",
+        message: "No usable grant for this connection",
+      };
+    if (
+      grant.status !== "active" ||
+      !connection.enabled ||
+      connection.status !== "active"
+    )
+      return {
+        ok: false,
+        reason: "connection_unavailable",
+        message: "Connection has been revoked",
+      };
+    let token: string;
+    try {
+      token = await credential(row);
+    } catch {
+      return {
+        ok: false,
+        reason: "credential_missing",
+        message: "No credential stored",
+      };
+    }
+    const config = databricksConnectionConfigSchema.safeParse(
+      (connection.config as { databricks?: unknown }).databricks,
+    );
+    if (!config.success)
+      return {
+        ok: false,
+        reason: "connection_unavailable",
+        message: "Connection configuration is invalid",
+      };
+    return {
+      ok: true,
+      credential: {
+        token,
+        host: config.data.workspaceHost,
+        catalog: config.data.catalog,
+        schema: config.data.schema,
+        modelPrefix: config.data.modelPrefix,
+      },
+      attribution: {
+        connectionId: connection.id,
+        grantId: grant.id,
+        provider: "databricks",
+        method: metadata.data.method,
+        mode: grant.kind === "user" ? "delegated" : "shared",
+        responsibleUserId: userId,
+      },
+    };
   }
   async function save(
     companyId: string,
@@ -617,6 +733,20 @@ export function aiConnectionService(db: Db) {
           ),
         );
       if (!app) throw unprocessable("Could not find the provider application");
+      // Databricks-specific, non-secret connection settings (workspace host, catalog,
+      // schema, optional model prefix) live under `config.databricks`, alongside — not
+      // merged with — the generic `config.ai` envelope shared by every provider.
+      // `createAiConnectionSchema`'s superRefine guarantees these are present and valid
+      // whenever `input.provider === "databricks"`.
+      const databricksConfig =
+        input.provider === "databricks"
+          ? databricksConnectionConfigSchema.parse({
+              workspaceHost: (input as { workspaceHost?: string }).workspaceHost,
+              catalog: (input as { catalog?: string }).catalog,
+              schema: (input as { schema?: string }).schema,
+              modelPrefix: (input as { modelPrefix?: string }).modelPrefix,
+            })
+          : undefined;
       if (reconnect)
         await tx
           .update(toolConnections)
@@ -625,7 +755,11 @@ export function aiConnectionService(db: Db) {
             status: "active",
             healthStatus: "ok",
             healthMessage: null,
-            config: { ...reconnect.connection.config, aiIsolatedSubscription: input.method === "subscription" && input.provider !== "anthropic" },
+            config: {
+              ...reconnect.connection.config,
+              aiIsolatedSubscription: input.method === "subscription" && input.provider !== "anthropic",
+              ...(databricksConfig ? { databricks: databricksConfig } : {}),
+            },
             updatedAt: new Date(),
           })
           .where(eq(toolConnections.id, id));
@@ -650,6 +784,7 @@ export function aiConnectionService(db: Db) {
               sourceTemplateKey: input.provider,
               ai: { provider: input.provider, method: input.method },
               aiIsolatedSubscription: input.method === "subscription" && input.provider !== "anthropic",
+              ...(databricksConfig ? { databricks: databricksConfig } : {}),
             },
             createdByUserId: userId,
           });
@@ -772,8 +907,13 @@ export function aiConnectionService(db: Db) {
         entityId: id,
         details: { provider: input.provider, method: input.method, grantId },
       });
+      // A reconnect can rotate the token or edit the connection's Databricks
+      // config (host/catalog/schema/modelPrefix); any previously cached combo
+      // list for this connection is now potentially stale or unauthorized.
+      if (reconnect && input.provider === "databricks")
+        invalidateDatabricksModelServiceCache(id);
       return { connectionId: id, grantId };
     });
   }
-  return { list, select, credential, save, setDefault, membership };
+  return { list, select, credential, save, setDefault, membership, resolveDatabricksCredential };
 }

@@ -26,6 +26,7 @@ const payload = {
   paperclipEnvKeys: Object.keys(process.env)
     .filter((key) => key.startsWith("PAPERCLIP_"))
     .sort(),
+  databricksToken: process.env.DATABRICKS_TOKEN || null,
 };
 if (capturePath) {
   fs.writeFileSync(capturePath, JSON.stringify(payload), "utf8");
@@ -57,6 +58,7 @@ type CapturePayload = {
   paperclipApiKey?: string | null;
   paperclipApiBridgeMode?: string | null;
   paperclipEnvKeys: string[];
+  databricksToken?: string | null;
 };
 
 type LogEntry = {
@@ -1641,6 +1643,95 @@ process.exit(1);
       else process.env.PAPERCLIP_IN_WORKTREE = previousPaperclipInWorktree;
       if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
       else process.env.CODEX_HOME = previousCodexHome;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("routes a Databricks providerRuntimeHint into the spawned process's env and config.toml, never inlining the token", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-codex-execute-databricks-"));
+    const workspace = path.join(root, "workspace");
+    const commandPath = path.join(root, "codex");
+    const capturePath = path.join(root, "capture.json");
+    // Use an explicit env.CODEX_HOME override (the same mechanism the
+    // "respects an explicit CODEX_HOME config override" test above uses) so
+    // this test exercises the real providerRuntimeHint -> spawned-process-env
+    // wiring without depending on managed-home auth.json symlinking, which is
+    // an orthogonal concern already covered by other tests in this file.
+    const explicitCodexHome = path.join(root, "explicit-codex-home");
+    await fs.mkdir(workspace, { recursive: true });
+    await fs.mkdir(explicitCodexHome, { recursive: true });
+    await fs.writeFile(path.join(explicitCodexHome, "auth.json"), `${fakeCodexAuthJson}\n`, "utf8");
+    await writeFakeCodexCommand(commandPath);
+
+    const previousHome = process.env.HOME;
+    process.env.HOME = root;
+
+    const token = "fixture-databricks-pat-do-not-leak";
+    try {
+      const logs: LogEntry[] = [];
+      const result = await execute({
+        runId: "run-databricks",
+        agent: {
+          id: "agent-1",
+          companyId: "company-1",
+          name: "Codex Coder",
+          adapterType: "codex_local",
+          adapterConfig: { engine: "cli", modelProvider: "databricks" },
+        },
+        runtime: {
+          sessionId: null,
+          sessionParams: null,
+          sessionDisplayId: null,
+          taskKey: null,
+        },
+        config: {
+          engine: "cli",
+          command: commandPath,
+          cwd: workspace,
+          model: "main.paperclip.combo_ux",
+          env: {
+            PAPERCLIP_TEST_CAPTURE_PATH: capturePath,
+            CODEX_HOME: explicitCodexHome,
+            DATABRICKS_TOKEN: token,
+          },
+          providerRuntimeHint: {
+            provider: "databricks",
+            baseUrl: "https://acme.cloud.databricks.com/ai-gateway/codex/v1",
+            wireApi: "responses",
+          },
+          promptTemplate: "Follow the paperclip heartbeat.",
+        },
+        context: {},
+        authToken: "run-jwt-token",
+        onLog: async (stream, chunk) => {
+          logs.push({ stream, chunk });
+        },
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.errorMessage).toBeNull();
+
+      const capture = JSON.parse(await fs.readFile(capturePath, "utf8")) as CapturePayload;
+      // The spawned child process's own env carries the token under
+      // DATABRICKS_TOKEN -- this is the actual process env, not the
+      // in-memory env map `prepareManagedAiRuntime` returns.
+      expect(capture.databricksToken).toBe(token);
+
+      // The generated per-run Codex provider config routes at the workspace's
+      // Unity Gateway with `wire_api = "responses"`, and references the
+      // token only via env_key indirection.
+      const configText = capture.codexConfigContents ?? "";
+      expect(configText).toContain("/ai-gateway/codex/v1");
+      expect(configText).toContain('wire_api = "responses"');
+      expect(configText).toContain('env_key = "DATABRICKS_TOKEN"');
+      expect(configText).toContain('model_provider = "databricks"');
+      expect(configText).not.toContain(token);
+
+      // No log line emitted during this run contains the literal token.
+      expect(JSON.stringify(logs)).not.toContain(token);
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
       await fs.rm(root, { recursive: true, force: true });
     }
   });

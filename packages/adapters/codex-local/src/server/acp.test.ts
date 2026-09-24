@@ -725,6 +725,172 @@ describe("codex_local ACP lane", () => {
     );
   });
 
+  it("reports Databricks readiness for the ACP non-remote lane when DATABRICKS_TOKEN is set (Requirement 6)", async () => {
+    const root = await makeTempRoot("paperclip-codex-acp-databricks-ready-");
+    const commandPath = path.join(root, "bin", "codex-acp");
+    await fs.mkdir(path.dirname(commandPath), { recursive: true });
+    await fs.writeFile(commandPath, "#!/usr/bin/env sh\n", "utf8");
+    setNodeVersion("v24.11.0");
+    delete process.env.OPENAI_API_KEY;
+
+    const result = await testCodexAcpEnvironment({
+      adapterType: "codex_local",
+      companyId: "company-1",
+      config: {
+        engine: "acp",
+        cwd: root,
+        agentCommand: commandPath,
+        providerRuntimeHint: {
+          provider: "databricks",
+          baseUrl: "https://acme.cloud.databricks.com/ai-gateway/codex/v1",
+          wireApi: "responses",
+        },
+        env: { DATABRICKS_TOKEN: "dapi-fixture-token" },
+      },
+    });
+
+    expect(result.status).toBe("pass");
+    expect(result.checks).toContainEqual(
+      expect.objectContaining({
+        code: "codex_acp_native_auth_detected",
+        level: "info",
+      }),
+    );
+    expect(result.checks).not.toContainEqual(
+      expect.objectContaining({ code: "codex_acp_credentials_missing" }),
+    );
+  });
+
+  it("still reports missing credentials for a Databricks-configured ACP agent with no token (Requirement 6)", async () => {
+    const root = await makeTempRoot("paperclip-codex-acp-databricks-missing-");
+    const commandPath = path.join(root, "bin", "codex-acp");
+    await fs.mkdir(path.dirname(commandPath), { recursive: true });
+    await fs.writeFile(commandPath, "#!/usr/bin/env sh\n", "utf8");
+    setNodeVersion("v24.11.0");
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.CODEX_HOME;
+
+    const result = await testCodexAcpEnvironment({
+      adapterType: "codex_local",
+      companyId: "company-1",
+      config: {
+        engine: "acp",
+        cwd: root,
+        agentCommand: commandPath,
+        providerRuntimeHint: {
+          provider: "databricks",
+          baseUrl: "https://acme.cloud.databricks.com/ai-gateway/codex/v1",
+          wireApi: "responses",
+        },
+        env: { DATABRICKS_TOKEN: "" },
+      },
+    });
+
+    expect(result.status).toBe("warn");
+    expect(result.checks).toContainEqual(
+      expect.objectContaining({
+        code: "codex_acp_credentials_missing",
+        level: "warn",
+      }),
+    );
+  });
+
+  it("reports Databricks readiness for the ACP sandbox lane when DATABRICKS_TOKEN is set (Requirement 6)", async () => {
+    const root = await makeTempRoot("paperclip-codex-acp-databricks-sandbox-ready-");
+    setNodeVersion("v24.11.0");
+    delete process.env.OPENAI_API_KEY;
+
+    const result = await testCodexAcpEnvironment({
+      adapterType: "codex_local",
+      companyId: "company-1",
+      config: {
+        engine: "acp",
+        cwd: root,
+        agentCommand: "node ./fake-acp.js",
+        providerRuntimeHint: {
+          provider: "databricks",
+          baseUrl: "https://acme.cloud.databricks.com/ai-gateway/codex/v1",
+          wireApi: "responses",
+        },
+        env: { DATABRICKS_TOKEN: "dapi-fixture-token" },
+      },
+      executionTarget: {
+        kind: "remote",
+        transport: "sandbox",
+        providerKey: "fake-plugin",
+        remoteCwd: "/work",
+        runner: {
+          execute: async () => ({
+            exitCode: 0,
+            signal: null,
+            timedOut: false,
+            stdout: "",
+            stderr: "",
+            pid: null,
+            startedAt: new Date().toISOString(),
+          }),
+        },
+      } as never,
+    });
+
+    expect(result.checks).toContainEqual(
+      expect.objectContaining({
+        code: "codex_acp_native_auth_detected",
+        level: "info",
+      }),
+    );
+    expect(result.checks).not.toContainEqual(
+      expect.objectContaining({ code: "adapter_auth_missing" }),
+    );
+  });
+
+  it("still reports the canonical missing-auth check for a Databricks-configured ACP sandbox agent with no token (Requirement 6)", async () => {
+    const root = await makeTempRoot("paperclip-codex-acp-databricks-sandbox-missing-");
+    setNodeVersion("v24.11.0");
+    delete process.env.OPENAI_API_KEY;
+
+    const result = await testCodexAcpEnvironment({
+      adapterType: "codex_local",
+      companyId: "company-1",
+      config: {
+        engine: "acp",
+        cwd: root,
+        agentCommand: "node ./fake-acp.js",
+        providerRuntimeHint: {
+          provider: "databricks",
+          baseUrl: "https://acme.cloud.databricks.com/ai-gateway/codex/v1",
+          wireApi: "responses",
+        },
+        env: { DATABRICKS_TOKEN: "" },
+      },
+      executionTarget: {
+        kind: "remote",
+        transport: "sandbox",
+        providerKey: "fake-plugin",
+        remoteCwd: "/work",
+        runner: {
+          execute: async () => ({
+            exitCode: 0,
+            signal: null,
+            timedOut: false,
+            stdout: "",
+            stderr: "",
+            pid: null,
+            startedAt: new Date().toISOString(),
+          }),
+        },
+      } as never,
+    });
+
+    expect(result.status).toBe("warn");
+    expect(result.checks).toContainEqual(
+      expect.objectContaining({
+        code: "adapter_auth_missing",
+        level: "warn",
+      }),
+    );
+  });
+
   it("executes through ACPX with Codex session config and ephemeral skills", async () => {
     const root = await makeTempRoot("paperclip-codex-acp-exec-");
     const skill = await createRuntimeSkill(root);

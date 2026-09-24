@@ -7,6 +7,7 @@ import { and, eq } from "drizzle-orm";
 import { type Db, companySecrets, connectionGrants } from "@paperclipai/db";
 import {
   AI_CONNECTION_CAPABILITIES,
+  databricksConnectionConfigSchema,
   type AiConnectionBinding,
 } from "@paperclipai/shared";
 import { aiConnectionService } from "./ai-connections.js";
@@ -31,6 +32,7 @@ export const AI_AUTH_ENV_KEYS = [
   "OPENROUTER_API_KEY",
   "XAI_API_KEY",
   "GROK_API_KEY",
+  "DATABRICKS_TOKEN",
   "CODEX_HOME",
   "GROK_HOME",
   "CLAUDE_CONFIG_DIR",
@@ -293,6 +295,28 @@ export async function prepareManagedAiRuntime(
       });
       env.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
     }
+    // Databricks: the generic api_key branch above already set
+    // env.DATABRICKS_TOKEN via capability.envKey. What's still missing is the
+    // per-run routing hint (workspace base URL + wire API) the codex_local
+    // adapter needs to point Codex at the workspace's Unity Gateway instead
+    // of OpenAI. Read the non-secret workspace config already present on
+    // `selection.connection.config.databricks` (persisted by `save()`) —
+    // reusing the row from the generic `service.select()` call above avoids a
+    // second grant/audience/revocation resolution path that could disagree
+    // with this one (e.g. if a grant is revoked between two separate calls).
+    let providerRuntimeHint:
+      | { provider: "databricks"; baseUrl: string; wireApi: "responses" }
+      | undefined;
+    if (input.binding.provider === "databricks") {
+      const databricksConfig = databricksConnectionConfigSchema.parse(
+        (selection.connection.config as { databricks?: unknown }).databricks,
+      );
+      providerRuntimeHint = {
+        provider: "databricks",
+        baseUrl: `${databricksConfig.workspaceHost}/ai-gateway/codex/v1`,
+        wireApi: "responses",
+      };
+    }
     const generation = createHash("sha256")
       .update(value)
       .digest("hex")
@@ -303,6 +327,15 @@ export async function prepareManagedAiRuntime(
         ...input.config,
         env,
         managedAiConnection: { ...selection.attribution, identity },
+        // Nested inside `config` (not a sibling of it) so that every caller
+        // which merges `managedAiRuntime.config` into its own run config
+        // (e.g. heartbeat.ts's `Object.assign(resolvedConfig,
+        // managedAiRuntime.config)`) automatically carries this forward to
+        // `ctx.config` in the adapter's execute(), the same way
+        // `managedAiConnection` already does. Contains no secret — only
+        // `provider`/`baseUrl`/`wireApi` — so it is as safe to nest here as
+        // `managedAiConnection` already is.
+        ...(providerRuntimeHint ? { providerRuntimeHint } : {}),
       },
       attribution: selection.attribution,
       accountName: selection.connection.name,

@@ -37,6 +37,10 @@ import {
 } from "./codex-auth-cache.js";
 import { resolveCodexExecutionEngineForRun, testCodexAcpEnvironment } from "./acp.js";
 import { ADAPTER_AUTH_MISSING_CHECK_CODE } from "./auth-check.js";
+import {
+  checkDatabricksConnectivity,
+  readDatabricksProviderRuntimeHint,
+} from "./databricks-provider-runtime.js";
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
   if (checks.some((check) => check.level === "error")) return "fail";
@@ -338,6 +342,76 @@ export async function testEnvironment(
       message: err instanceof Error ? err.message : "Command is not executable",
       detail: command,
     });
+  }
+
+  const databricksHint = readDatabricksProviderRuntimeHint(config);
+
+  if (databricksHint) {
+    // Databricks-active run: the OpenAI-oriented API-key/native-auth checks
+    // and the real Codex-process hello probe below are meaningless here (the
+    // run never uses OPENAI_API_KEY or ~/.codex/auth.json, and spawning a real
+    // `codex exec` would need the full PAPERCLIP_CODEX_PROVIDERS/config.toml
+    // merge just to route correctly). Replace that whole section with a
+    // direct, cheap HTTP connectivity check against the Unity Gateway itself.
+    const canRunProbe =
+      checks.every((check) => check.code !== "codex_cwd_invalid" && check.code !== "codex_command_unresolvable");
+    if (canRunProbe) {
+      const token = isNonEmpty(env.DATABRICKS_TOKEN) ? env.DATABRICKS_TOKEN.trim() : null;
+      if (!token) {
+        checks.push({
+          code: "databricks_connectivity_token_missing",
+          level: "warn",
+          message: "DATABRICKS_TOKEN is not set. Databricks runs will fail until a token is configured.",
+          hint: "Reconnect the Databricks AI connection, or set DATABRICKS_TOKEN in this adapter's config.",
+        });
+      } else {
+        const result = await checkDatabricksConnectivity(databricksHint.baseUrl, token);
+        if (result.kind === "reachable") {
+          checks.push({
+            code: "databricks_connectivity_passed",
+            level: "info",
+            message: "Databricks Unity Gateway is reachable with the configured credential.",
+          });
+        } else if (result.kind === "invalid_credential") {
+          checks.push({
+            code: "databricks_connectivity_invalid_credential",
+            level: "error",
+            message: "Databricks rejected the connection's credential.",
+            hint: "Reconnect the Databricks AI connection with a valid personal access token.",
+          });
+        } else if (result.kind === "insufficient_permission") {
+          checks.push({
+            code: "databricks_connectivity_insufficient_permission",
+            level: "error",
+            message: "Databricks credential lacks permission for this workspace's Unity Gateway.",
+            hint: "Grant the token access to the AI Gateway, or use a token with sufficient workspace permissions.",
+          });
+        } else if (result.kind === "rate_limited") {
+          checks.push({
+            code: "databricks_connectivity_rate_limited",
+            level: "warn",
+            message: "Databricks is rate limiting this connection.",
+            ...(result.retryAfterSeconds != null
+              ? { detail: `Retry after ${result.retryAfterSeconds}s.` }
+              : {}),
+            hint: "Retry the connection test after the rate limit window passes.",
+          });
+        } else {
+          checks.push({
+            code: "databricks_connectivity_unavailable",
+            level: "error",
+            message: "Databricks workspace's Unity Gateway is temporarily unavailable or did not respond in time.",
+            hint: "Verify the workspace host is correct and reachable, then retry.",
+          });
+        }
+      }
+    }
+    return {
+      adapterType: ctx.adapterType,
+      status: summarizeStatus(checks),
+      checks,
+      testedAt: new Date().toISOString(),
+    };
   }
 
   const configOpenAiKey = env.OPENAI_API_KEY;

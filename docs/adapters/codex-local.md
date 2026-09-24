@@ -136,6 +136,96 @@ needs a maintainer security review before merge. Treat this docs section as
 the follow-up implementation spec, not as authorization to add the warning in
 a docs-only change.
 
+## Databricks Unity Gateway (Combos)
+
+A combo is a Databricks Unity Catalog Model Service that encapsulates routing, fallback, and cost
+policy across one or more underlying models; selecting a combo picks that policy as the agent's
+model instead of picking a single OpenAI model directly.
+
+### Connecting a workspace
+
+Create an AI Connection with `provider: "databricks"` and `method: "api_key"` (a Databricks
+personal access token). `method: "subscription"` is not supported for this provider. Alongside
+the token, the connection stores:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `workspaceHost` | string | Yes | Workspace origin only, e.g. `https://acme.cloud.databricks.com`. No path, query string, fragment, or userinfo. |
+| `catalog` | string | Yes | Unity Catalog name the combo lives under. |
+| `schema` | string | Yes | Schema within `catalog` the combo lives under. |
+| `modelPrefix` | string | No | If set, only combos whose short name starts with this prefix are discovered. |
+
+A `workspaceHost` that isn't a bare `https://` origin is rejected with a `422` and the connection
+is not persisted. Creating, editing, or revoking a Databricks connection writes an activity log
+entry like any other AI Connection mutation, and the PAT is never returned in any API response,
+including the connection's own read/list endpoints.
+
+### Combo discovery
+
+Paperclip does not maintain its own copy of a workspace's combos. The combo list for a connection
+is queried live from Unity Catalog Model Services under the connection's `catalog.schema`, and a
+freshly created combo becomes selectable without any Paperclip deploy or restart. Results are
+cached for 60 seconds per connection/query; opening the combo selector again within that window
+reuses the cached list, and a "Refresh combos" action bypasses the cache and re-queries the
+workspace. OpenAI models and Databricks combos are never combined in the same selector — an agent
+is either OpenAI-backed or Databricks-backed, not both at once.
+
+### Selecting a combo
+
+For a `codex_local` agent configured with a Databricks connection, the model field is labeled
+"Combo" instead of "Model". The persisted `model` value is the qualified combo id exactly as
+discovered from Unity Catalog (the `model-services/` resource-name prefix already stripped, e.g.
+`main.paperclip.combo_ux`), and Paperclip does not re-normalize or rewrite that id at execution
+time — Codex is called with that exact string as the model.
+
+### Execution routing
+
+When a run's active provider is Databricks, Paperclip generates a per-run Codex model-provider
+entry pointing `base_url` at `<workspaceHost>/ai-gateway/codex/v1` with `wire_api = "responses"`,
+so the same Codex CLI process that normally talks to OpenAI instead talks to the workspace's Unity
+Gateway. The provider entry references the token only through `env_key = "DATABRICKS_TOKEN"`
+indirection: the literal PAT is never written into `config.toml`, never included in run events,
+activity log entries, or API responses, and only exists in the spawned process's environment for
+that run's duration. As with any other managed run, `config.toml` is restored to its pre-run state
+on the next run preparation, whether the run succeeded, failed, or crashed before cleanup.
+
+### Auth readiness
+
+A run whose active provider is Databricks is considered credential-ready as soon as
+`DATABRICKS_TOKEN` is non-empty — `OPENAI_API_KEY` is not required. Runs on a non-Databricks
+provider keep the existing `OPENAI_API_KEY`/`auth.json` readiness behavior unchanged.
+
+### Unavailable combos
+
+If an agent's saved combo id is not present in a fresh discovery result (for example, the combo
+was deleted or renamed in Databricks), the selector still shows that id but labeled
+"Unavailable", and blocks saving or starting a new run for that agent until a different, valid
+combo is selected. Paperclip never falls back to an OpenAI model when this happens.
+
+### Diagnostics
+
+The environment Test action for a Databricks-configured agent runs a lightweight connectivity
+check against the workspace's `/ai-gateway/codex/v1` endpoint for the selected combo, separate
+from a full Codex invocation so it does not spend real inference budget. The result is classified
+as an invalid-credential, insufficient-permission, rate-limited, or unavailable outcome, using the
+same classification the combo-discovery API uses.
+
+Callers of the combo-discovery API (`GET /companies/:companyId/adapters/codex_local/models?provider=databricks&connectionId=...`)
+should expect standard HTTP statuses rather than Databricks-specific ones: `401` for an
+invalid/expired PAT, `403` for insufficient permission on the catalog/schema or for a connection
+the actor has no usable grant on, `429` for rate limiting (with `Retry-After` echoed when
+Databricks provides it), `502` for a Databricks 5xx/timeout/network failure, `422` for a
+malformed/disallowed workspace host or a missing `connectionId`, and `404`/`409` for a connection
+that doesn't belong to the company or has been revoked.
+
+### Out of scope
+
+This integration only discovers and selects combos that already exist in Databricks. It does not
+support: creating or editing combos from Paperclip; any Databricks auth method other than PAT
+(`api_key`); visualizing a combo's internal routing or traffic-split destinations; or webhook-based
+real-time sync of the combo list (discovery is pull-based only, on selector open and on
+manual/TTL-based refresh).
+
 ## Manual Local CLI
 
 For manual local CLI usage outside heartbeat runs (for example running as `codexcoder` directly), use:

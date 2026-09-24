@@ -248,6 +248,26 @@ export interface AdapterModel {
   label: string;
 }
 
+/**
+ * Context passed to `ServerAdapterModule.listModels`/`refreshModels` for
+ * provider-scoped, company-scoped model discovery (e.g. Databricks Unity
+ * Gateway combos surfaced through the `codex_local` adapter).
+ */
+export interface AdapterModelDiscoveryContext {
+  companyId: string;
+  provider?: string;
+  connectionId?: string;
+  refresh?: boolean;
+  /** Resolved server-side only; never serialized back to the client. */
+  resolvedCredential?: {
+    token: string;
+    host: string;
+    catalog: string;
+    schema: string;
+    modelPrefix?: string;
+  };
+}
+
 export type AdapterEnvironmentCheckLevel = "info" | "warn" | "error";
 
 export interface AdapterEnvironmentCheck {
@@ -463,14 +483,14 @@ export interface ServerAdapterModule {
   /** How this adapter receives Paperclip's run-scoped control tools. */
   runtimeToolDelivery?: AdapterRuntimeToolDelivery;
   models?: AdapterModel[];
-  listModels?: () => Promise<AdapterModel[]>;
+  listModels?: (context?: AdapterModelDiscoveryContext) => Promise<AdapterModel[]>;
   /**
    * Optional explicit refresh hook for model discovery.
    * Use this when the adapter caches discovered models and needs a bypass path
    * so the UI can fetch newly released models without waiting for cache expiry
    * or a Paperclip code update.
    */
-  refreshModels?: () => Promise<AdapterModel[]>;
+  refreshModels?: (context?: AdapterModelDiscoveryContext) => Promise<AdapterModel[]>;
   agentConfigurationDoc?: string;
   /**
    * Optional lifecycle hook when an agent is approved/hired (join-request or hire_agent approval).

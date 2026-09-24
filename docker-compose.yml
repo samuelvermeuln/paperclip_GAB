@@ -1,0 +1,7 @@
+# Root-level entry point for deploy platforms that require a docker-compose.yml
+# at the repository root (e.g. Coolify/Dokploy/EasyPanel-style git deploys).
+# The real compose definition lives in docker/docker-compose.yml; see that file
+# and docker/ for docker-compose.quickstart.yml and
+# docker-compose.untrusted-review.yml variants.
+include:
+  - docker/docker-compose.yml

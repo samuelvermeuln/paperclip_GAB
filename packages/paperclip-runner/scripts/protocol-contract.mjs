@@ -18,7 +18,9 @@ function contractError(code, detail) {
 }
 
 export async function readJson(path) {
-  const source = await readFile(path, "utf8");
+  // Normalize CRLF to LF so the manifest hash is identical regardless of the
+  // checkout platform's line-ending/autocrlf configuration.
+  const source = (await readFile(path, "utf8")).replace(/\r\n/g, "\n");
   try {
     return { source, value: JSON.parse(source) };
   } catch (error) {

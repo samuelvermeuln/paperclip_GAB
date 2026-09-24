@@ -1,0 +1,101 @@
+name: Docker Hub
+
+# Manual publish to Docker Hub. Builds the self-hosted "production" image
+# target (see Dockerfile) on a GitHub-hosted amd64 runner and pushes it to
+# samuelvv/paperclip-gab, so deploy platforms without a local Docker daemon
+# (e.g. Dokploy) can pull a pre-built image by tag instead of building the
+# repo from source (which is prone to build-cache-related failures on the
+# platform side).
+#
+# Required repository secrets (Settings > Secrets and variables > Actions):
+#   DOCKERHUB_USERNAME - Docker Hub account/namespace that owns the repo
+#   DOCKERHUB_TOKEN     - Docker Hub Access Token (Account Settings > Security)
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Docker Hub tag to publish (e.g. v1, 2026-09-24, latest)"
+        required: true
+        default: "latest"
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # `.git` is dockerignored, so a running image cannot derive its own
+      # version/commit otherwise. Computed here from the pristine checkout and
+      # passed into the build; the server keeps its existing fallbacks if empty.
+      - name: Compute build version
+        id: build-version
+        run: |
+          set -euo pipefail
+          version="$(git describe --tags --match 'v*' --long --dirty 2>/dev/null || true)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Stamping build version: ${version:-<none>}"
+
+      # ISO week stamp for the Dockerfile's tool layer, matching docker.yml's
+      # convention: the layer caches across builds and re-pulls the @latest
+      # CLI tools only when the week rolls over.
+      - name: Compute tool cache epoch
+        id: tools-epoch
+        run: echo "epoch=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Free runner disk
+        run: |
+          set -euo pipefail
+          echo "Disk before cleanup:"
+          df -h
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/share/swift \
+            /usr/local/lib/android \
+            /usr/local/share/boost \
+            /usr/local/share/powershell \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            /opt/hostedtoolcache/PyPy \
+            /opt/hostedtoolcache/Ruby || true
+          docker system prune -af || true
+          echo "Disk after cleanup:"
+          df -h
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: production
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            PAPERCLIP_BUILD_VERSION=${{ steps.build-version.outputs.version }}
+            PAPERCLIP_BUILD_COMMIT=${{ github.sha }}
+            CLI_TOOLS_CACHE_EPOCH=${{ steps.tools-epoch.outputs.epoch }}
+          tags: |
+            samuelvv/paperclip-gab:${{ inputs.tag }}
+            samuelvv/paperclip-gab:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify PID 1 reaps orphaned processes
+        run: |
+          set -euo pipefail
+          docker run --rm -i --pull always "samuelvv/paperclip-gab:${{ inputs.tag }}" sh -s < scripts/assert-orphan-reaping.sh

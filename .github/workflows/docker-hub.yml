@@ -119,8 +119,12 @@ jobs:
           tags: |
             samuelvv/paperclip-gab:${{ steps.target-tag.outputs.tag }}
             samuelvv/paperclip-gab:sha-${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # No cache-from/cache-to: this build previously reused a stale
+          # buildx GHA-cache layer for `COPY . .` after a source fix, which
+          # let an outdated /app/packages/paperclip-runner slip past the
+          # checkout and reproduce a "stale manifest" failure that the
+          # current commit's source no longer has. Every build is cold and
+          # verifiably matches HEAD; the timeout above budgets for that.
 
       - name: Verify PID 1 reaps orphaned processes
         run: |

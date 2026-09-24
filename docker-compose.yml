@@ -1,8 +1,0 @@
-# Root-level entry point for deploy platforms that require a docker-compose.yml
-# at the repository root (e.g. Coolify/Dokploy/EasyPanel-style git deploys).
-# This includes the single-container quickstart variant (service name
-# "paperclip", embedded PGlite database, no separate db container). See
-# docker/docker-compose.yml for the Postgres + server two-service variant and
-# docker/docker-compose.untrusted-review.yml for the review-sandbox variant.
-include:
-  - docker/docker-compose.quickstart.yml

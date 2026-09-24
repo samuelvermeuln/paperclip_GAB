@@ -1,17 +1,24 @@
 services:
   postgres:
     image: postgres:17-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_USER: "${POSTGRES_USER:-paperclip}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-paperclip}"
       POSTGRES_DB: "${POSTGRES_DB:-paperclip}"
+      # Controls the port Postgres itself listens on inside the container.
+      PGPORT: "${POSTGRES_PORT:-5432}"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-paperclip} -d ${POSTGRES_DB:-paperclip}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-paperclip} -d ${POSTGRES_DB:-paperclip} -p ${POSTGRES_PORT:-5432}"]
       interval: 2s
       timeout: 5s
       retries: 30
-    ports:
-      - "5432:5432"
+      # Grace period before failed checks count toward `retries`, so a slow
+      # first-boot initdb on constrained hosts does not trip "unhealthy".
+      start_period: 30s
+    # Not published to the host: paperclip reaches it over the compose
+    # network at postgres:5432, and publishing a DB port is an unnecessary
+    # exposure on shared/multi-tenant hosts (Dokploy, Coolify, etc.).
     volumes:
       - pgdata:/var/lib/postgresql/data
 
@@ -19,6 +26,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
+    restart: unless-stopped
     # No `init: true` here on purpose. The image makes tini PID 1 itself
     # (Dockerfile ENTRYPOINT), which covers every launch path -- compose, plain
     # `docker run`, the quadlet units and the ECS task definition -- instead of
@@ -31,7 +39,7 @@ services:
     ports:
       - "3100:3100"
     environment:
-      DATABASE_URL: "postgres://${POSTGRES_USER:-paperclip}:${POSTGRES_PASSWORD:-paperclip}@postgres:5432/${POSTGRES_DB:-paperclip}"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-paperclip}:${POSTGRES_PASSWORD:-paperclip}@postgres:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-paperclip}"
       PORT: "3100"
       SERVE_UI: "true"
       PAPERCLIP_DEPLOYMENT_MODE: "authenticated"

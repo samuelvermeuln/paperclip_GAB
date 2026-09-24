@@ -1,23 +1,36 @@
 name: Docker Hub
 
-# Manual publish to Docker Hub. Builds the self-hosted "production" image
-# target (see Dockerfile) on a GitHub-hosted amd64 runner and pushes it to
+# Publish to Docker Hub. Builds the self-hosted "production" image target
+# (see Dockerfile) on a GitHub-hosted amd64 runner and pushes it to
 # samuelvv/paperclip-gab, so deploy platforms without a local Docker daemon
 # (e.g. Dokploy) can pull a pre-built image by tag instead of building the
 # repo from source (which is prone to build-cache-related failures on the
 # platform side).
+#
+# Runs automatically on every push to main (publishes ":latest" and
+# ":sha-<commit>"), and can also be run manually with a custom tag via
+# workflow_dispatch (publishes "<tag>" and ":sha-<commit>").
 #
 # Required repository secrets (Settings > Secrets and variables > Actions):
 #   DOCKERHUB_USERNAME - Docker Hub account/namespace that owns the repo
 #   DOCKERHUB_TOKEN     - Docker Hub Access Token (Account Settings > Security)
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       tag:
-        description: "Docker Hub tag to publish (e.g. v1, 2026-09-24, latest)"
+        description: "Docker Hub tag to publish (e.g. v1, 2026-09-24). Leave default for a push build."
         required: true
         default: "latest"
+
+# A newer push supersedes a pending build; an in-flight build always finishes
+# and publishes rather than being killed mid-push.
+concurrency:
+  group: docker-hub-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -49,6 +62,20 @@ jobs:
       - name: Compute tool cache epoch
         id: tools-epoch
         run: echo "epoch=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
+      # Manual dispatch publishes the given tag; a plain push to main always
+      # publishes "latest". Both also get a "sha-<commit>" tag for traceability.
+      - name: Resolve target tag
+        id: target-tag
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="latest"
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "Publishing tag: ${tag}"
 
       - name: Free runner disk
         run: |
@@ -90,7 +117,7 @@ jobs:
             PAPERCLIP_BUILD_COMMIT=${{ github.sha }}
             CLI_TOOLS_CACHE_EPOCH=${{ steps.tools-epoch.outputs.epoch }}
           tags: |
-            samuelvv/paperclip-gab:${{ inputs.tag }}
+            samuelvv/paperclip-gab:${{ steps.target-tag.outputs.tag }}
             samuelvv/paperclip-gab:sha-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -98,4 +125,4 @@ jobs:
       - name: Verify PID 1 reaps orphaned processes
         run: |
           set -euo pipefail
-          docker run --rm -i --pull always "samuelvv/paperclip-gab:${{ inputs.tag }}" sh -s < scripts/assert-orphan-reaping.sh
+          docker run --rm -i --pull always "samuelvv/paperclip-gab:${{ steps.target-tag.outputs.tag }}" sh -s < scripts/assert-orphan-reaping.sh

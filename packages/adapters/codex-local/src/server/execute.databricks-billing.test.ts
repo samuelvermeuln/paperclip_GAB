@@ -19,9 +19,10 @@ describe("resolveCodexBillingType", () => {
   });
 
   it("is 'api' for a Databricks-active run even with no OPENAI_API_KEY set", () => {
-    // A Databricks run authenticates via DATABRICKS_TOKEN, never
-    // OPENAI_API_KEY, so the OpenAI-only fallback would otherwise
-    // misclassify it as a ChatGPT "subscription" run.
+    // A Databricks run authenticates through the Unity Gateway's external OAuth
+    // M2M helper (`providerRuntimeHint`, provider === "databricks"), never
+    // OPENAI_API_KEY and never a static DATABRICKS_TOKEN, so the OpenAI-only
+    // fallback would otherwise misclassify it as a ChatGPT "subscription" run.
     expect(resolveCodexBillingType({}, true)).toBe("api");
   });
 

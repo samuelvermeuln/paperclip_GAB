@@ -31,6 +31,7 @@ type Props = {
 /** Connections hosts the same provider step as agent setup, with its own save intent. */
 export function AiConnectionCredentialStep(props: Props) {
   if (props.provider === "openrouter") return <ApiKeyConnectionStep {...props} />;
+  if (props.provider === "databricks") return <DatabricksConnectionStep {...props} />;
   return <SubscriptionConnectionStep {...props} />;
 }
 
@@ -90,7 +91,7 @@ function SubscriptionConnectionStep({ companyId, provider, initialMethod, fixedM
       onBack={onCancel}
       onConnected={() => {}}
       testConnection={async () => false}
-      managedAccount={{ intent, initialMethod, fixedMethod: fixedMethod || Boolean(connectionId), disabled: loading || Boolean(error) || !name.trim(), onComplete: (result) => { void client.invalidateQueries({ queryKey: ["ai-connections", companyId] }); onComplete(result); } }}
+      managedAccount={{ intent, initialMethod: initialMethod === "oauth_m2m" ? undefined : initialMethod, fixedMethod: fixedMethod || Boolean(connectionId), disabled: loading || Boolean(error) || !name.trim(), onComplete: (result) => { void client.invalidateQueries({ queryKey: ["ai-connections", companyId] }); onComplete(result); } }}
     />}
   </div>;
 }
@@ -109,5 +110,57 @@ function ApiKeyConnectionStep({ companyId, provider, connectionId, name: initial
     {save.error && <p role="alert" className="text-sm text-destructive">{save.error.message}</p>}
     <ProviderApiKeyCard providerName="OpenRouter" value={apiKey} onChange={setApiKey} onSubmit={() => save.mutate()} disabled={save.isPending} placeholder="Enter API key here" autoFocus />
     <div className="flex justify-between gap-2"><Button variant="ghost" onClick={onCancel}>Cancel</Button><Button disabled={!name.trim() || !apiKey.trim() || save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Connecting…" : "Connect"}</Button></div>
+  </div>;
+}
+
+function DatabricksConnectionStep({ companyId, connectionId, name: initialName, ownership: initialOwnership, agentIds, allAgents, onComplete, onCancel }: Props) {
+  const [name, setName] = useState(initialName);
+  const [workspaceHost, setWorkspaceHost] = useState("");
+  const [clientId, setClientId] = useState("");
+  // Never seeded from a prior value and cleared on settle: the secret is write-only in the UI.
+  const [clientSecret, setClientSecret] = useState("");
+  const [catalog, setCatalog] = useState("");
+  const [schema, setSchema] = useState("");
+  const [modelPrefix, setModelPrefix] = useState("");
+  const [ownership, setOwnership] = useState<"personal" | "shared">(initialOwnership);
+  const client = useQueryClient();
+  const save = useMutation({
+    mutationFn: () => aiConnectionsApi.create(companyId, {
+      provider: "databricks",
+      method: "oauth_m2m",
+      name,
+      ownership,
+      agentIds,
+      allAgents,
+      connectionId,
+      clientId: clientId.trim(),
+      clientSecret,
+      workspaceHost: workspaceHost.trim(),
+      catalog: catalog.trim(),
+      schema: schema.trim(),
+      modelPrefix: modelPrefix.trim() ? modelPrefix.trim() : undefined,
+    }),
+    onSuccess: (result) => { void client.invalidateQueries({ queryKey: ["ai-connections", companyId] }); onComplete({ ...result, method: "oauth_m2m" }); },
+    // Clear the secret whether the save succeeded or failed — it never survives a submit in the UI.
+    onSettled: () => setClientSecret(""),
+  });
+  const complete = [name, workspaceHost, clientId, clientSecret, catalog, schema].every((value) => value.trim().length > 0);
+  return <div className="mx-auto w-full min-w-0 max-w-xl space-y-4">
+    <label className="block space-y-2 text-sm">Connection name<Input value={name} onChange={(event) => setName(event.target.value)} disabled={Boolean(connectionId)} /></label>
+    <label className="block space-y-2 text-sm">Workspace URL<Input value={workspaceHost} onChange={(event) => setWorkspaceHost(event.target.value)} placeholder="https://your-workspace.cloud.databricks.com" autoComplete="off" spellCheck={false} /></label>
+    <label className="block space-y-2 text-sm">Client ID<Input value={clientId} onChange={(event) => setClientId(event.target.value)} autoComplete="off" spellCheck={false} /></label>
+    <label className="block space-y-2 text-sm">Client secret<Input type="password" value={clientSecret} onChange={(event) => setClientSecret(event.target.value)} autoComplete="off" spellCheck={false} /></label>
+    <label className="block space-y-2 text-sm">Catalog<Input value={catalog} onChange={(event) => setCatalog(event.target.value)} autoComplete="off" spellCheck={false} /></label>
+    <label className="block space-y-2 text-sm">Schema<Input value={schema} onChange={(event) => setSchema(event.target.value)} autoComplete="off" spellCheck={false} /></label>
+    <label className="block space-y-2 text-sm">Prefix (optional)<Input value={modelPrefix} onChange={(event) => setModelPrefix(event.target.value)} autoComplete="off" spellCheck={false} /></label>
+    <label className="block space-y-2 text-sm">Sharing<Select value={ownership} onValueChange={(value) => setOwnership(value as "personal" | "shared")} disabled={Boolean(connectionId)}>
+      <SelectTrigger className="w-full" aria-label="Sharing"><SelectValue /></SelectTrigger>
+      <SelectContent>
+        <SelectItem value="personal">Personal</SelectItem>
+        <SelectItem value="shared">Company shared</SelectItem>
+      </SelectContent>
+    </Select></label>
+    {save.error && <p role="alert" className="text-sm text-destructive">{save.error.message}</p>}
+    <div className="flex justify-between gap-2"><Button variant="ghost" onClick={onCancel}>Cancel</Button><Button disabled={!complete || save.isPending} onClick={() => save.mutate()}>{save.isPending ? "Connecting…" : "Connect"}</Button></div>
   </div>;
 }

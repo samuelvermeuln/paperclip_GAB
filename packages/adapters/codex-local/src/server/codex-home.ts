@@ -1,3 +1,4 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -53,6 +54,17 @@ function nonEmpty(value: string | undefined): string | null {
 
 export async function pathExists(candidate: string): Promise<boolean> {
   return fs.access(candidate).then(() => true).catch(() => false);
+}
+
+/**
+ * True when `candidate` exists and is readable by the current process
+ * (`R_OK`). Follows symlinks like {@link pathExists}. Used by the Databricks
+ * readiness check to confirm the run's `DATABRICKS_CREDENTIAL_FILE` is present
+ * and legible without ever opening it — the file holds the OAuth
+ * `clientSecret`, which the readiness predicate must never read or inspect.
+ */
+export async function fileIsReadable(candidate: string): Promise<boolean> {
+  return fs.access(candidate, fsConstants.R_OK).then(() => true).catch(() => false);
 }
 
 // Co-change notice: this function's logic is mirrored by parseAuth in
@@ -876,10 +888,21 @@ export interface CodexCredentialReadinessInput {
    */
   activeProvider?: string | null;
   /**
-   * Resolved `config.env.DATABRICKS_TOKEN` value for the run, if any. Only
-   * consulted when `activeProvider === "databricks"`.
+   * Absolute path of the Databricks OAuth helper command
+   * (`config.providerRuntimeHint.authCommand`), when the resolved AI Connection
+   * binding for this run is Databricks. Only consulted when
+   * `activeProvider === "databricks"`; readiness requires it to be present
+   * (a configured helper), never the credential value itself.
    */
-  configuredDatabricksToken?: string | null;
+  databricksAuthCommand?: string | null;
+  /**
+   * Resolved `config.env.DATABRICKS_CREDENTIAL_FILE` path for the run — the
+   * `0600` `{ host, clientId, clientSecret }` file the runtime writes into the
+   * ephemeral home for the OAuth helper to read. Only consulted when
+   * `activeProvider === "databricks"`. Readiness checks that this path exists
+   * and is readable; the file's contents (the `clientSecret`) are never read.
+   */
+  databricksCredentialFile?: string | null;
 }
 
 export interface CodexCredentialReadiness {
@@ -900,12 +923,18 @@ export interface CodexCredentialReadiness {
  * check *before* dispatch and surface a configuration-incomplete blocker instead
  * of dispatching a run that is guaranteed to fail with "no Codex credentials".
  *
- * - When `activeProvider === "databricks"`, readiness is a pure env check: a
- *   non-empty `configuredDatabricksToken` is sufficient on its own, and
- *   `OPENAI_API_KEY`/`auth.json` are not consulted at all (Requirement 6.3).
- *   This mirrors the `configuredApiKey` branch below in that it never touches
- *   disk, but is checked first because a Databricks-active run's `CODEX_HOME`
- *   auth state is irrelevant to whether the run can authenticate.
+ * - When `activeProvider === "databricks"`, the run authenticates through the
+ *   Unity Gateway via an external OAuth M2M helper, so `OPENAI_API_KEY`/
+ *   `auth.json` are not consulted at all. Readiness is: the auth helper command
+ *   (`databricksAuthCommand`, from `providerRuntimeHint.authCommand`) is
+ *   configured AND the run's `databricksCredentialFile`
+ *   (`DATABRICKS_CREDENTIAL_FILE`) points at an existing, readable file. The
+ *   credential file's contents (the `clientSecret`) are never opened or
+ *   inspected — only its presence/readability — so no static long-lived token
+ *   is ever read here (Property 8), and a missing helper or credential file
+ *   yields `ready: false` rather than a silent fallback to OpenAI (Property 1).
+ *   This is checked first because a Databricks-active run's `CODEX_HOME` auth
+ *   state is irrelevant to whether the run can authenticate.
  * - An external/user-supplied `CODEX_HOME` override manages its own auth, so it
  *   is always treated as ready (Paperclip must not seed or inspect it).
  * - A non-empty resolved `OPENAI_API_KEY` means API-key auth, always ready.
@@ -929,11 +958,17 @@ export async function evaluateCodexCredentialReadiness(
   const effectiveHome = configuredCodexHome ?? resolveManagedCodexHomeDir(env, input.companyId);
 
   if (input.activeProvider === "databricks") {
-    const configuredDatabricksToken = nonEmpty(input.configuredDatabricksToken ?? undefined);
+    const authCommand = nonEmpty(input.databricksAuthCommand ?? undefined);
+    const credentialFile = nonEmpty(input.databricksCredentialFile ?? undefined);
+    // Ready only when the OAuth helper is configured AND its credential file is
+    // present and readable. Never open the file: the clientSecret it holds must
+    // not be read here (Property 8, no static long-lived token). A missing
+    // helper or credential file is not-ready, never a fallback (Property 1).
+    const ready = authCommand != null && credentialFile != null && (await fileIsReadable(credentialFile));
     return {
       managed: effectiveHomeIsManaged,
       authMode: "databricks",
-      ready: configuredDatabricksToken != null,
+      ready,
       effectiveHome,
       sharedSourceHome,
     };

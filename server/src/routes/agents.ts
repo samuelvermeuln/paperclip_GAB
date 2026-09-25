@@ -3251,9 +3251,9 @@ export function agentRoutes(
       if (!connectionId) {
         throw unprocessable("connectionId is required for provider=databricks");
       }
-      // Databricks is only wired for codex_local (AI_CONNECTION_CAPABILITIES.databricks.methods.api_key.adapters).
+      // Databricks is only wired for codex_local (AI_CONNECTION_CAPABILITIES.databricks.methods.oauth_m2m.adapters).
       // A different adapter type simply has no Databricks combos to offer.
-      if (!AI_CONNECTION_CAPABILITIES.databricks.methods.api_key?.adapters.includes(modelAdapterType)) {
+      if (!AI_CONNECTION_CAPABILITIES.databricks.methods.oauth_m2m?.adapters.includes(modelAdapterType)) {
         res.json([]);
         return;
       }
@@ -3295,13 +3295,13 @@ export function agentRoutes(
           : await listAdapterModels(modelAdapterType, context);
         res.json(models);
       } catch (err) {
-        // The credential resolved above, but the live Unity Catalog call
-        // itself can still fail (Requirement 10.1-10.4): the workspace may
-        // reject the PAT (401), deny the catalog/schema (403), rate-limit
-        // (429, echoing Retry-After), be unreachable/5xx/timeout (502), or
-        // the stored host may fail live origin validation (422). None of
-        // this is a generic Paperclip bug, so it must not fall through to
-        // the catch-all 500 (Requirement 10.6).
+        // The credential resolved above, but the live OAuth token exchange or
+        // Unity Catalog call itself can still fail (Requirement 10.1-10.4): the
+        // workspace may reject the client credentials (401), deny the
+        // catalog/schema (403), rate-limit (429, echoing Retry-After), be
+        // unreachable/5xx/timeout (502), or the stored host may fail live
+        // origin validation (422). None of this is a generic Paperclip bug, so
+        // it must not fall through to the catch-all 500 (Requirement 10.6).
         if (err instanceof DatabricksDiscoveryError) {
           if (err.kind === "rate_limited" && err.retryAfterSeconds !== undefined) {
             res.setHeader("Retry-After", String(Math.round(err.retryAfterSeconds)));

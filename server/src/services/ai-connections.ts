@@ -22,6 +22,7 @@ import {
   aiConnectionMetadataSchema,
   aiSubscriptionNeedsIsolatedLogin,
   databricksConnectionConfigSchema,
+  databricksOAuthCredentialSchema,
   isAiConnectionCompatible,
   type AiConnectionBinding,
   type AiConnectionAttribution,
@@ -34,18 +35,26 @@ import {
 import { forbidden, notFound, unprocessable } from "../errors.js";
 import { logActivity } from "./activity-log.js";
 import { invalidateDatabricksModelServiceCache } from "./databricks-model-services.js";
+import { invalidateDatabricksAccessToken } from "./databricks-oauth.js";
 import { secretService } from "./secrets.js";
 
-/** Resolved, server-side-only Databricks credential for one connection. Never
- * serialize `token` back to a caller that might reach the client. */
+/** Resolved, server-side-only Databricks OAuth M2M credential for one
+ * connection. Never serialize `clientSecret` back to a caller that might reach
+ * the client — the discovery/OAuth services trade it for a short-lived access
+ * token server-side, and only the token (never this secret) ever leaves the
+ * server. */
 export interface DatabricksCredentialResolution {
   ok: true;
   credential: {
-    token: string;
+    clientId: string;
+    clientSecret: string;
     host: string;
     catalog: string;
     schema: string;
     modelPrefix?: string;
+    /** The resolved secret's `latestVersion`, always populated. Composes the
+     * discovery/token cache key so a rotation never reuses a stale entry. */
+    credentialVersion: string;
   };
   attribution: AiConnectionAttribution;
 }
@@ -401,7 +410,14 @@ export function aiConnectionService(db: Db) {
   // `rows()`, which has no `attribution`) satisfies this parameter without
   // fabricating a fake attribution value. `select()`'s full return type still
   // structurally satisfies this narrower type, so its call site is unaffected.
-  async function credential(row: Pick<Awaited<ReturnType<typeof select>>, "connection" | "grant">) {
+  /** Resolves the stored `ai.credential` value together with the resolved
+   * secret's `latestVersion`. The version is the canonical, monotonically
+   * increasing counter the secrets service bumps on every rotation, so callers
+   * that need a cache-partitioning `credentialVersion` (Databricks discovery /
+   * OAuth) read it here alongside the value without a second lookup. */
+  async function resolveCredentialWithVersion(
+    row: Pick<Awaited<ReturnType<typeof select>>, "connection" | "grant">,
+  ): Promise<{ value: string; version: number }> {
     const ref = row.grant.credentialSecretRefs.find(
       (r) => r.configPath === "ai.credential",
     );
@@ -446,23 +462,29 @@ export function aiConnectionService(db: Db) {
         context,
       );
       if (!result) throw unprocessable("Reconnect this AI account");
-      return result.value;
+      return { value: result.value, version: secret.latestVersion };
     }
-    return secrets.resolveSecretValue(
+    const value = await secrets.resolveSecretValue(
       row.connection.companyId,
       secret.id,
       "latest",
       context,
     );
+    return { value, version: secret.latestVersion };
+  }
+  async function credential(
+    row: Pick<Awaited<ReturnType<typeof select>>, "connection" | "grant">,
+  ) {
+    return (await resolveCredentialWithVersion(row)).value;
   }
   /**
    * Resolves and authorizes a Databricks connection/grant for discovery or
    * execution. Every branch scopes the connection lookup by `companyId`
    * first, so a `connectionId` belonging to a different company is
    * indistinguishable from a nonexistent one — it never reveals that the
-   * connection exists elsewhere. The resolved token is only ever returned
-   * to server-side callers that inject it into a child process environment;
-   * it must never be serialized into an HTTP response.
+   * connection exists elsewhere. The resolved `clientSecret` is only ever
+   * returned to server-side callers that trade it for a short-lived access
+   * token; it must never be serialized into an HTTP response or logged.
    */
   async function resolveDatabricksCredential(
     companyId: string,
@@ -479,6 +501,23 @@ export function aiConnectionService(db: Db) {
         ok: false,
         reason: "incompatible",
         message: "Connection is not a Databricks connection",
+      };
+    // Legacy Databricks connections created before this migration were stored
+    // with `method: "api_key"` and a raw PAT as their secret value. Such a
+    // connection can never resolve as an OAuth M2M `{ clientId, clientSecret }`
+    // pair, and the stored PAT is deliberately NOT auto-migrated — reconnecting
+    // through the dedicated Databricks credential step (Client ID/Client secret)
+    // is the only supported path. Guard the legacy method here, before the
+    // secret is ever resolved or interpreted as an OAuth pair, so a legacy PAT
+    // is never parsed as OAuth and no parse exception can escape. Multi-tenant
+    // scoping is preserved: the connection was already looked up by `companyId`
+    // above, so this only runs for a Databricks connection owned by this company.
+    if (metadata.data.method !== "oauth_m2m")
+      return {
+        ok: false,
+        reason: "connection_unavailable",
+        message:
+          "Connection credential must be reconnected with a Client ID and Client secret",
       };
     const audience = await db
       .select()
@@ -505,9 +544,9 @@ export function aiConnectionService(db: Db) {
         reason: "connection_unavailable",
         message: "Connection has been revoked",
       };
-    let token: string;
+    let resolved: { value: string; version: number };
     try {
-      token = await credential(row);
+      resolved = await resolveCredentialWithVersion(row);
     } catch {
       return {
         ok: false,
@@ -515,6 +554,25 @@ export function aiConnectionService(db: Db) {
         message: "No credential stored",
       };
     }
+    // The stored secret value is a JSON `{ clientId, clientSecret }` pair
+    // validated by `databricksOAuthCredentialSchema` (design 6.2). A legacy
+    // PAT string (a pre-migration connection) is not valid JSON for this
+    // schema; it is treated as an unavailable connection here rather than
+    // letting a parse throw escape. The dedicated legacy-method guard belongs
+    // to a later step of this migration.
+    let parsedValue: unknown;
+    try {
+      parsedValue = JSON.parse(resolved.value);
+    } catch {
+      parsedValue = undefined;
+    }
+    const oauth = databricksOAuthCredentialSchema.safeParse(parsedValue);
+    if (!oauth.success)
+      return {
+        ok: false,
+        reason: "connection_unavailable",
+        message: "Connection credential must be reconnected with a Client ID and Client secret",
+      };
     const config = databricksConnectionConfigSchema.safeParse(
       (connection.config as { databricks?: unknown }).databricks,
     );
@@ -527,11 +585,13 @@ export function aiConnectionService(db: Db) {
     return {
       ok: true,
       credential: {
-        token,
+        clientId: oauth.data.clientId,
+        clientSecret: oauth.data.clientSecret,
         host: config.data.workspaceHost,
         catalog: config.data.catalog,
         schema: config.data.schema,
         modelPrefix: config.data.modelPrefix,
+        credentialVersion: String(resolved.version),
       },
       attribution: {
         connectionId: connection.id,
@@ -640,6 +700,21 @@ export function aiConnectionService(db: Db) {
         )
           throw unprocessable("The connection changed. Start reconnect again.");
       }
+      // Databricks stores an OAuth M2M `{ clientId, clientSecret }` pair as the
+      // secret value (design 6.2) rather than a raw PAT. Serialize the validated
+      // pair from the create/reconnect input; every other provider keeps storing
+      // its already-verified credential string as-is. The `clientSecret` only
+      // ever lives inside this encrypted secret value — it is never returned to
+      // the HTTP layer or logged.
+      const secretValue =
+        input.provider === "databricks"
+          ? JSON.stringify(
+              databricksOAuthCredentialSchema.parse({
+                clientId: (input as { clientId?: string }).clientId,
+                clientSecret: (input as { clientSecret?: string }).clientSecret,
+              }),
+            )
+          : verifiedCredential;
       let secretId = reconnect?.grant.credentialSecretRefs.find(
         (r) => r.configPath === "ai.credential",
       )?.secretId;
@@ -660,7 +735,7 @@ export function aiConnectionService(db: Db) {
       if (secretId)
         await secrets.rotate(
           secretId,
-          { value: verifiedCredential },
+          { value: secretValue },
           { userId },
         );
       else if (input.ownership === "personal") {
@@ -676,7 +751,7 @@ export function aiConnectionService(db: Db) {
         const secret = await secrets.createCurrentUserSecretValue(
           companyId,
           userId,
-          { definitionId: definition.id, value: verifiedCredential },
+          { definitionId: definition.id, value: secretValue },
           { userId },
         );
         secretId = secret.id;
@@ -687,7 +762,7 @@ export function aiConnectionService(db: Db) {
             {
               name: `ai-${grantId}`,
               provider: "local_encrypted",
-              value: verifiedCredential,
+              value: secretValue,
             },
             { userId },
           )
@@ -907,11 +982,16 @@ export function aiConnectionService(db: Db) {
         entityId: id,
         details: { provider: input.provider, method: input.method, grantId },
       });
-      // A reconnect can rotate the token or edit the connection's Databricks
-      // config (host/catalog/schema/modelPrefix); any previously cached combo
-      // list for this connection is now potentially stale or unauthorized.
-      if (reconnect && input.provider === "databricks")
+      // A reconnect rotates the secret (bumping its `latestVersion`, and thus
+      // the `credentialVersion` that partitions both caches) and can edit the
+      // connection's Databricks config (host/catalog/schema/modelPrefix). Any
+      // previously cached combo list or access token for this connection is now
+      // potentially stale or unauthorized, so invalidate both explicitly — even
+      // though the version bump alone already prevents a stale-version cache hit.
+      if (reconnect && input.provider === "databricks") {
         invalidateDatabricksModelServiceCache(id);
+        invalidateDatabricksAccessToken(id);
+      }
       return { connectionId: id, grantId };
     });
   }

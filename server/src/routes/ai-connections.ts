@@ -201,13 +201,17 @@ function assertDatabricksHostAllowed(
     );
 }
 
-/** Validates a Databricks PAT + workspace config live against Unity Catalog Model
- * Services, mapping any `DatabricksDiscoveryError` to the same `unprocessable(...)`
- * error style the generic provider path above uses. Never lets a raw
- * `DatabricksDiscoveryError` escape uncaught, and never surfaces the token or a
- * provider response body (both guarantees already hold in the underlying error). */
-async function validateDatabricksApiKey(input: {
-  apiKey: string;
+/** Validates a Databricks OAuth M2M credential (Client ID / Client secret) plus
+ * workspace config live against Unity Catalog Model Services. Under the hood
+ * `validateDatabricksCredential` performs a client-credentials token exchange and a
+ * single Unity Catalog page — no static PAT is involved. Maps any
+ * `DatabricksDiscoveryError` to the same `unprocessable(...)` error style the generic
+ * provider path above uses; never lets a raw `DatabricksDiscoveryError` escape
+ * uncaught, and never surfaces the client secret, the issued access token, or a
+ * provider response body (all guarantees already hold in the underlying error). */
+async function validateDatabricksOAuthCredential(input: {
+  clientId: string;
+  clientSecret: string;
   workspaceHost?: string;
   catalog?: string;
   schema?: string;
@@ -215,7 +219,8 @@ async function validateDatabricksApiKey(input: {
 }) {
   const credential: DatabricksModelServiceCredential = {
     host: input.workspaceHost!,
-    token: input.apiKey,
+    clientId: input.clientId,
+    clientSecret: input.clientSecret,
     catalog: input.catalog!,
     schema: input.schema!,
     modelPrefix: input.modelPrefix,
@@ -226,9 +231,13 @@ async function validateDatabricksApiKey(input: {
     if (!(error instanceof DatabricksDiscoveryError)) throw error;
     if (error.kind === "invalid_host")
       throw unprocessable("The Databricks workspace host is invalid.");
-    if (error.kind === "invalid_credential" || error.kind === "insufficient_permission")
-      throw unprocessable("The provider rejected this API key.");
-    throw unprocessable("The provider could not verify this account. Try again.");
+    if (error.kind === "invalid_credential")
+      throw unprocessable("Databricks rejected these Client ID / Client secret credentials.");
+    if (error.kind === "insufficient_permission")
+      throw unprocessable(
+        "These Databricks credentials lack permission for the selected catalog and schema.",
+      );
+    throw unprocessable("Databricks could not verify these credentials. Try again.");
   }
 }
 
@@ -351,15 +360,39 @@ export function aiConnectionRoutes(db: Db, options: AiConnectionRouteOptions = {
         companyId,
         input,
       );
+      const attemptStartedAt = new Date();
+      if (input.provider === "databricks") {
+        // Databricks authenticates with OAuth M2M (Client ID / Client secret),
+        // not an api_key or the subscription sign-in flow. Enforce the SaaS host
+        // allowlist before any network call, then verify the credential live via
+        // a client-credentials token exchange against Unity Catalog. `save()`
+        // serializes the { clientId, clientSecret } pair itself for databricks,
+        // so the positional credential argument is unused on this path.
+        assertDatabricksHostAllowed(input.workspaceHost!, options);
+        await validateDatabricksOAuthCredential({
+          clientId: input.clientId!,
+          clientSecret: input.clientSecret!,
+          workspaceHost: input.workspaceHost,
+          catalog: input.catalog,
+          schema: input.schema,
+          modelPrefix: input.modelPrefix,
+        });
+        const result = await service.save(
+          companyId,
+          userId,
+          input,
+          "",
+          undefined,
+          attemptStartedAt,
+        );
+        res.status(201).json(result);
+        return;
+      }
       if (input.method !== "api_key")
         throw unprocessable(
           "Use the existing provider sign-in flow to connect a subscription",
         );
-      const attemptStartedAt = new Date();
-      if (input.provider === "databricks") {
-        assertDatabricksHostAllowed(input.workspaceHost!, options);
-        await validateDatabricksApiKey({ ...input, apiKey: input.apiKey! });
-      } else await validateAiApiKey(input.provider, input.apiKey!);
+      await validateAiApiKey(input.provider, input.apiKey!);
       const result = await service.save(
         companyId,
         userId,

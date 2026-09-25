@@ -17,9 +17,11 @@ import {
   resolveAdapterExecutionTargetCwd,
   prepareAdapterExecutionTargetRuntime,
 } from "@paperclipai/adapter-utils/execution-target";
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
+import { promisify } from "node:util";
 import { parseCodexJsonl } from "./parse.js";
 import { SANDBOX_INSTALL_COMMAND } from "../index.js";
 import { codexHomeDir, readCodexAuthInfo } from "./quota.js";
@@ -40,7 +42,10 @@ import { ADAPTER_AUTH_MISSING_CHECK_CODE } from "./auth-check.js";
 import {
   checkDatabricksConnectivity,
   readDatabricksProviderRuntimeHint,
+  type DatabricksProviderRuntimeHint,
 } from "./databricks-provider-runtime.js";
+
+const execFileAsync = promisify(execFile);
 
 function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentTestResult["status"] {
   if (checks.some((check) => check.level === "error")) return "fail";
@@ -50,6 +55,45 @@ function summarizeStatus(checks: AdapterEnvironmentCheck[]): AdapterEnvironmentT
 
 function isNonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+/** Defensive cap on helper stdout; an OAuth access token is small. */
+const DATABRICKS_HELPER_MAX_STDOUT_BYTES = 1024 * 1024;
+
+/**
+ * Runs the Databricks OAuth M2M `auth.command` helper as a short-lived
+ * subprocess and returns its stdout (the access token) on a clean exit.
+ *
+ * This mirrors exactly how the run's Codex process invokes the
+ * `[model_providers.databricks.auth] command`: the helper reads
+ * `DATABRICKS_CREDENTIAL_FILE` from its inherited environment, exchanges the
+ * client credentials for a short-lived access token, and writes ONLY that
+ * token to stdout. The connectivity probe replays the same step so the Test
+ * result reflects the credential the run would actually use — never a static
+ * long-lived `DATABRICKS_TOKEN`.
+ *
+ * The token is never logged and never placed in a check. The helper's stderr
+ * is intentionally discarded here: it may reference request context, and
+ * Requirements 4.6/8.x forbid surfacing the client secret, any access token,
+ * or the Databricks response body. A non-zero exit, timeout, spawn failure, or
+ * exceeded output buffer is reported uniformly as "no token available".
+ */
+async function acquireDatabricksHelperToken(
+  hint: DatabricksProviderRuntimeHint,
+  env: NodeJS.ProcessEnv,
+): Promise<{ ok: true; token: string } | { ok: false }> {
+  try {
+    const { stdout } = await execFileAsync(hint.authCommand, hint.authArgs, {
+      env,
+      timeout: hint.authTimeoutMs > 0 ? hint.authTimeoutMs : undefined,
+      maxBuffer: DATABRICKS_HELPER_MAX_STDOUT_BYTES,
+      windowsHide: true,
+    });
+    const token = stdout.trim();
+    return token.length > 0 ? { ok: true, token } : { ok: false };
+  } catch {
+    return { ok: false };
+  }
 }
 
 function firstNonEmptyLine(text: string): string {
@@ -356,16 +400,42 @@ export async function testEnvironment(
     const canRunProbe =
       checks.every((check) => check.code !== "codex_cwd_invalid" && check.code !== "codex_command_unresolvable");
     if (canRunProbe) {
-      const token = isNonEmpty(env.DATABRICKS_TOKEN) ? env.DATABRICKS_TOKEN.trim() : null;
-      if (!token) {
+      // The Databricks run authenticates through the OAuth M2M `auth.command`
+      // helper, not a static `DATABRICKS_TOKEN`. Mint a token exactly as the
+      // run would — spawn the helper with `DATABRICKS_CREDENTIAL_FILE` in its
+      // environment and read the token from stdout — then probe connectivity
+      // with it. The token is never surfaced in any check.
+      const helperConfigured = isNonEmpty(databricksHint.authCommand);
+      const credentialFileConfigured = isNonEmpty(env.DATABRICKS_CREDENTIAL_FILE);
+      const acquired =
+        helperConfigured && credentialFileConfigured
+          ? await acquireDatabricksHelperToken(databricksHint, runtimeEnv)
+          : null;
+      if (!helperConfigured || !credentialFileConfigured) {
+        // Helper not wired up (no absolute command, or no ephemeral credential
+        // file in the environment): no token can be minted, so skip the HTTP
+        // connectivity call. Equivalent role to the pre-OAuth
+        // `databricks_connectivity_token_missing` readiness warning.
         checks.push({
           code: "databricks_connectivity_token_missing",
           level: "warn",
-          message: "DATABRICKS_TOKEN is not set. Databricks runs will fail until a token is configured.",
-          hint: "Reconnect the Databricks AI connection, or set DATABRICKS_TOKEN in this adapter's config.",
+          message:
+            "The Databricks credential is not ready. Databricks runs will fail until the connection is reconnected.",
+          hint: "Reconnect the Databricks AI connection with a valid Client ID and Client secret.",
+        });
+      } else if (!acquired || !acquired.ok) {
+        // Helper is configured but could not mint an access token (non-zero
+        // exit or timeout). Skip the connectivity call. Its stderr is
+        // deliberately not surfaced here (Requirements 4.6/8.x).
+        checks.push({
+          code: "databricks_connectivity_helper_failed",
+          level: "error",
+          message:
+            "The Databricks authentication helper could not obtain an access token.",
+          hint: "Reconnect the Databricks AI connection with a valid Client ID and Client secret, then retry.",
         });
       } else {
-        const result = await checkDatabricksConnectivity(databricksHint.baseUrl, token);
+        const result = await checkDatabricksConnectivity(databricksHint.baseUrl, acquired.token);
         if (result.kind === "reachable") {
           checks.push({
             code: "databricks_connectivity_passed",
@@ -377,7 +447,7 @@ export async function testEnvironment(
             code: "databricks_connectivity_invalid_credential",
             level: "error",
             message: "Databricks rejected the connection's credential.",
-            hint: "Reconnect the Databricks AI connection with a valid personal access token.",
+            hint: "Reconnect the Databricks AI connection with a valid Client ID and Client secret.",
           });
         } else if (result.kind === "insufficient_permission") {
           checks.push({

@@ -1,4 +1,8 @@
 import type { AdapterModel } from "@paperclipai/adapter-utils";
+import {
+  fetchDatabricksAccessToken,
+  resolveDatabricksAccessToken,
+} from "./databricks-oauth.js";
 
 /**
  * Sole owner of Unity Catalog Model Services REST access: pagination,
@@ -7,14 +11,20 @@ import type { AdapterModel } from "@paperclipai/adapter-utils";
  *
  * This module never calls `GET /api/2.0/serving-endpoints` — that is a
  * different resource and is explicitly out of scope for discovery.
+ *
+ * The Unity Catalog calls authenticate with a short-lived OAuth M2M access
+ * token resolved from the connection's `clientId`/`clientSecret` via
+ * `databricks-oauth.ts`; this module never holds a static token.
  */
 
 /** A resolved, server-side-only Databricks credential for one connection. */
 export interface DatabricksModelServiceCredential {
   /** Origin only, e.g. "https://acme.cloud.databricks.com". Never logged. */
   host: string;
-  /** Personal access token. Resolved server-side only, never logged. */
-  token: string;
+  /** Service-principal OAuth M2M client id. Resolved server-side only, never logged. */
+  clientId: string;
+  /** Service-principal OAuth M2M client secret. Resolved server-side only, never logged. */
+  clientSecret: string;
   catalog: string;
   schema: string;
   modelPrefix?: string;
@@ -24,6 +34,14 @@ export interface DatabricksModelServiceCredential {
 export interface DatabricksDiscoveryKey {
   companyId: string;
   connectionId: string;
+  /**
+   * Credential version (bumped on rotate/reconnect). Part of the cache
+   * identity so a rotated secret can never reuse a token or combo list cached
+   * under the previous version even if explicit invalidation is missed. Never
+   * omitted — `resolveDatabricksCredential` always resolves the secret's
+   * latest version alongside the credential.
+   */
+  credentialVersion: string;
   host: string;
   catalog: string;
   schema: string;
@@ -58,6 +76,13 @@ const MODEL_SERVICES_PREFIX = "model-services/";
 const PAGE_SIZE = 100;
 const REQUEST_TIMEOUT_MS = 10_000;
 const CACHE_TTL_MS = 60_000;
+/**
+ * Hard cap on how many consecutive pages a single discovery may fetch while
+ * `next_page_token` keeps coming back. Reaching it without the token clearing
+ * means the workspace never completed pagination, so discovery is aborted and
+ * classified as a temporary unavailability (Requirement 1.9).
+ */
+const MAX_CONSECUTIVE_PAGES = 1000;
 /** Defensive cap on a single page response body; Unity Catalog pages are small JSON. */
 const MAX_RESPONSE_BYTES = 5 * 1024 * 1024;
 
@@ -81,14 +106,32 @@ const pending = new Map<string, Promise<AdapterModel[]>>();
 /** connectionId -> set of full cache keys, so invalidation can be scoped without a full scan. */
 const keysByConnectionId = new Map<string, Set<string>>();
 
-function serializeKey(key: DatabricksDiscoveryKey): string {
+/**
+ * Reserved marker for "no prefix filter configured". A configured `modelPrefix`
+ * is always a validated, trimmed, non-empty string, so this object marker can
+ * never serialize to the same JSON as a real prefix — keeping the cache key
+ * injective (Requirement 5.1) without reusing `null`, which could otherwise
+ * read as an intentional value.
+ */
+const NO_MODEL_PREFIX_MARKER = { noModelPrefix: true } as const;
+
+/**
+ * Builds the injective cache/discovery key string (Requirement 5.1, Property 2).
+ * Exported so the injectivity property test can exercise it directly. Uses
+ * `JSON.stringify` over a fixed-order array of all seven identity fields, which
+ * is unambiguous across field boundaries, and the reserved
+ * `NO_MODEL_PREFIX_MARKER` object for an absent `modelPrefix` so absent and
+ * present prefixes can never collide.
+ */
+export function serializeKey(key: DatabricksDiscoveryKey): string {
   return JSON.stringify([
     key.companyId,
     key.connectionId,
+    key.credentialVersion,
     key.host,
     key.catalog,
     key.schema,
-    key.modelPrefix ?? null,
+    key.modelPrefix ?? NO_MODEL_PREFIX_MARKER,
   ]);
 }
 
@@ -110,9 +153,10 @@ export function invalidateDatabricksModelServiceCache(connectionId: string): voi
 }
 
 /**
- * Lists all combos visible to the credential's token under `catalog.schema`.
- * Cached (60s TTL), keyed by the full `DatabricksDiscoveryKey`. `refresh:
- * true` bypasses and repopulates the cache.
+ * Lists all combos visible to the connection under `catalog.schema`. Each page
+ * is authenticated with a freshly resolved OAuth M2M access token. Cached (60s
+ * TTL), keyed by the full `DatabricksDiscoveryKey`. `refresh: true` bypasses
+ * and repopulates the cache.
  */
 export async function listDatabricksModelServices(
   key: DatabricksDiscoveryKey,
@@ -129,7 +173,7 @@ export async function listDatabricksModelServices(
     if (inFlight) return inFlight;
   }
 
-  const request = fetchAndNormalize(credential).then((value) => {
+  const request = fetchAndNormalize(key, credential).then((value) => {
     cache.set(cacheKey, { cachedAt: Date.now(), value });
     trackKey(key, cacheKey);
     return value;
@@ -143,9 +187,10 @@ export async function listDatabricksModelServices(
 }
 
 async function fetchAndNormalize(
+  key: DatabricksDiscoveryKey,
   credential: DatabricksModelServiceCredential,
 ): Promise<AdapterModel[]> {
-  const services = await fetchAllPages(credential);
+  const services = await fetchAllPages(key, credential);
   const normalized = services
     .map(toAdapterModel)
     .filter((model): model is AdapterModel => model !== null)
@@ -155,35 +200,51 @@ async function fetchAndNormalize(
 }
 
 async function fetchAllPages(
+  key: DatabricksDiscoveryKey,
   credential: DatabricksModelServiceCredential,
 ): Promise<RawModelService[]> {
   const services: RawModelService[] = [];
   let pageToken: string | undefined;
+  let pages = 0;
   do {
-    const page = await fetchPage(credential, pageToken);
+    // Resolve (and, if needed, renew) the OAuth M2M access token before each
+    // page so a long pagination never fails on a token that expired mid-run.
+    const { token } = await resolveDatabricksAccessToken(key, credential);
+    const page = await fetchPage(credential, token, pageToken);
     if (Array.isArray(page.model_services)) services.push(...page.model_services);
     pageToken = page.next_page_token && page.next_page_token.length > 0 ? page.next_page_token : undefined;
+    pages += 1;
+    if (pageToken && pages >= MAX_CONSECUTIVE_PAGES) {
+      throw new DatabricksDiscoveryError(
+        "unavailable",
+        "Databricks workspace paginated past the allowed limit without completing",
+      );
+    }
   } while (pageToken);
   return services;
 }
 
 /**
- * Validates a Databricks PAT and workspace config (host/catalog/schema) live,
- * with a single bounded request and no pagination or caching. Used at
- * connection-create time, before a `connectionId` exists to key a cache
- * entry by. Throws `DatabricksDiscoveryError` on any failure
- * (`invalid_credential`, `insufficient_permission`, `rate_limited`,
- * `unavailable`, `invalid_host`); never leaks the token or response body.
+ * Validates a Databricks OAuth M2M credential and workspace config
+ * (host/catalog/schema) live, with a single bounded request and no pagination
+ * or caching. Used at connection-create time, before a `connectionId` /
+ * `credentialVersion` exists to key a cache entry by — so the token exchange
+ * runs uncached via `fetchDatabricksAccessToken`. Throws
+ * `DatabricksDiscoveryError` on any failure (`invalid_credential`,
+ * `insufficient_permission`, `rate_limited`, `unavailable`, `invalid_host`);
+ * never leaks the client secret, the issued token, or the response body.
  */
 export async function validateDatabricksCredential(
   credential: DatabricksModelServiceCredential,
 ): Promise<void> {
   assertValidHost(credential.host);
-  await fetchPage(credential, undefined);
+  const { token } = await fetchDatabricksAccessToken(credential);
+  await fetchPage(credential, token, undefined);
 }
 
 async function fetchPage(
   credential: DatabricksModelServiceCredential,
+  accessToken: string,
   pageToken: string | undefined,
 ): Promise<ModelServicesPage> {
   const url = new URL("/api/2.1/unity-catalog/model-services", credential.host);
@@ -195,7 +256,7 @@ async function fetchPage(
   let response: Response;
   try {
     response = await fetch(url, {
-      headers: { Authorization: `Bearer ${credential.token}` },
+      headers: { Authorization: `Bearer ${accessToken}` },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
       redirect: "error",
     });
@@ -321,38 +382,52 @@ function assertValidHost(host: string): void {
 }
 
 /**
- * Strips the `model-services/` resource-name prefix, derives a display label
- * from the last dot-separated segment, strips a leading `combo`/`combo_`/
- * `combo-` token (case-insensitive) and prepends "Combo " in its place,
- * replaces remaining separators with spaces, and title-cases the result
- * (e.g. `combo_ux` -> `Combo Ux`, `combo-dev` -> `Combo Dev`).
+ * Derives a combo's identifier and display label from a Unity Catalog resource
+ * name.
+ *
+ * Identifier (Requirement 1.3): the `model-services/` prefix is stripped only
+ * when it is actually present at the start of the name; otherwise the resource
+ * name is kept unchanged.
+ *
+ * Label (Requirement 1.4): from the identifier's short name (its last
+ * dot-separated segment), each `-`/`_` becomes a space and the first letter of
+ * every resulting word is capitalized, while the remaining letters of each word
+ * keep their original case. e.g. `combo_ux` -> `Combo Ux`, `comboUX` ->
+ * `ComboUX` (no separator, rest of the word preserved), `dev-team` ->
+ * `Dev Team`.
  */
 export function toAdapterModel(service: RawModelService): AdapterModel | null {
-  if (typeof service.name !== "string" || !service.name.startsWith(MODEL_SERVICES_PREFIX)) return null;
-  const id = service.name.slice(MODEL_SERVICES_PREFIX.length);
+  if (typeof service.name !== "string") return null;
+  const id = service.name.startsWith(MODEL_SERVICES_PREFIX)
+    ? service.name.slice(MODEL_SERVICES_PREFIX.length)
+    : service.name;
   if (!id) return null;
   const shortName = id.split(".").pop() || id;
-  const hadComboPrefix = /^combo[-_]?/i.test(shortName);
-  const rest = shortName.replace(/^combo[-_]?/i, "");
-  const withPrefix = hadComboPrefix ? `Combo ${rest}` : shortName;
-  const spaced = withPrefix.replace(/[-_]+/g, " ").trim();
-  const label = titleCase(spaced.length > 0 ? spaced : shortName);
+  const words = shortName.split(/[-_]/).filter((word) => word.length > 0);
+  const label = words.length > 0 ? words.map(capitalizeFirstLetter).join(" ") : shortName;
   return { id, label };
 }
 
-function titleCase(value: string): string {
-  return value
-    .split(" ")
-    .filter((word) => word.length > 0)
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(" ");
+/** Uppercases only the first character of a word, preserving the case of the rest. */
+function capitalizeFirstLetter(word: string): string {
+  return word.charAt(0).toUpperCase() + word.slice(1);
 }
 
-/** Defensive filter: drops any entry outside the credential's configured catalog.schema. */
+/**
+ * Defensive filter (Requirement 1.6): drops any entry whose first two
+ * dot-separated segments are not exactly the configured `catalog` and `schema`.
+ * `startsWith` is case-sensitive, and the trailing dot pins the comparison to a
+ * whole-segment match rather than a mere prefix.
+ */
 function qualifiesUnderCatalogSchema(id: string, catalog: string, schema: string): boolean {
   return id.startsWith(`${catalog}.${schema}.`);
 }
 
+/**
+ * Prefix filter (Requirement 1.5): keeps only combos whose short name begins
+ * with the configured `modelPrefix`. `startsWith` is case-sensitive, so the
+ * comparison is case-sensitive as required.
+ */
 function matchesPrefix(id: string, modelPrefix: string | undefined): boolean {
   if (!modelPrefix) return true;
   const shortName = id.split(".").pop() || id;

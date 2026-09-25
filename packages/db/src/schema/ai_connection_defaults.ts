@@ -46,7 +46,7 @@ export const aiConnectionDefaults = pgTable(
     ),
     check(
       "ai_connection_defaults_method_check",
-      sql`${t.method} in ('subscription','api_key')`,
+      sql`${t.method} in ('subscription','api_key','oauth_m2m')`,
     ),
   ],
 );

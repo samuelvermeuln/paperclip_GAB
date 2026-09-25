@@ -1,0 +1,665 @@
+{
+  "pbtResults": {
+    "4.3 Escrever teste de propriedade (fast-check) em `server/src/services/databricks-model-services.test.ts`": {
+      "status": "passed",
+      "lastRunTimestamp": 1790306129363
+    }
+  },
+  "executionHistory": {
+    "1.1 Atualizar `packages/shared/src/ai-connections.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296240239
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296261194
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296782988
+      }
+    ],
+    "1.2 Escrever testes unitários em `packages/shared/src/ai-connections.test.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296240505
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790297117972
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298220329
+      }
+    ],
+    "1.3 Atualizar `AdapterModelDiscoveryContext` em `packages/adapter-utils/src/types.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296240698
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296263197
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296783915
+      }
+    ],
+    "2.1 Adicionar `fast-check` (versão `4.10.2`, fixa) como devDependency em `server/package.json`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296240880
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296263971
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296785827
+      }
+    ],
+    "2.2 Implementar `server/src/services/databricks-oauth.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296241176
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296265383
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296787862
+      }
+    ],
+    "2.3 Escrever testes unitários em `server/src/services/databricks-oauth.test.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296241381
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298224104
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298613715
+      }
+    ],
+    "2.4 Escrever teste de propriedade (fast-check) em `server/src/services/databricks-oauth.test.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296241608
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298640844
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790301695332
+      }
+    ],
+    "3.1 Atualizar `server/src/services/ai-connections.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296241811
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790297114162
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298217235
+      }
+    ],
+    "3.2 Escrever testes de integração em `server/src/__tests__/ai-connections.test.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296242079
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298639301
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790301693478
+      }
+    ],
+    "4.1 Atualizar `server/src/services/databricks-model-services.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296242304
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790297116057
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298218801
+      }
+    ],
+    "4.2 Escrever testes unitários em `server/src/services/databricks-model-services.test.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296242568
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298637801
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790301691636
+      }
+    ],
+    "4.3 Escrever teste de propriedade (fast-check) em `server/src/services/databricks-model-services.test.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296242809
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790305856052
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790306504548
+      }
+    ],
+    "4.4 Escrever teste de propriedade (fast-check) em `server/src/services/databricks-model-services.test.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296243006
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790306528297
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790307418890
+      }
+    ],
+    "5.1 Atualizar `server/src/routes/ai-connections.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296243199
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298634705
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790301687966
+      }
+    ],
+    "5.2 Escrever testes de integração em `server/src/__tests__/ai-connections.test.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296243382
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790302103865
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790307417053
+      }
+    ],
+    "6. Checkpoint — Garantir que os testes de servidor (contratos, token, conexão, descoberta,": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296243559
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790307820417
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790308034477
+      }
+    ],
+    "7.1 Atualizar `server/src/services/ai-connection-runtime.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296243788
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298636258
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790301689798
+      }
+    ],
+    "7.2 Escrever testes de integração em `server/src/__tests__/agent-hire-ai-connections.test.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296243997
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790302105696
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790305837239
+      }
+    ],
+    "8.1 Atualizar `packages/adapters/codex-local/src/server/databricks-provider-runtime.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296244224
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296267206
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296788467
+      }
+    ],
+    "8.2 Atualizar/escrever testes em `packages/adapters/codex-local/src/server/databricks-provider-runtime.test.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296244432
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790297119915
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298222074
+      }
+    ],
+    "9.1 Implementar `packages/adapters/codex-local/src/server/databricks-oauth-token-cli.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296244666
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296790197
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790297104354
+      }
+    ],
+    "9.2 Escrever testes unitários em `packages/adapters/codex-local/src/server/databricks-oauth-token-cli.test.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296244843
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790297120977
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298222829
+      }
+    ],
+    "10.1 Atualizar `packages/adapters/codex-local/src/server/codex-home.ts` e `execute.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296245063
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790302098393
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790305833576
+      }
+    ],
+    "10.2 Atualizar `packages/adapters/codex-local/src/server/test.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296245354
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790302100218
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790305835415
+      }
+    ],
+    "10.3 Atualizar testes existentes": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296245643
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790306530121
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790307420720
+      }
+    ],
+    "11. Checkpoint — Garantir que os testes do adapter `codex_local` (payload, helper, readiness,": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296245906
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790308042686
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790308273047
+      }
+    ],
+    "12.1 Atualizar `ui/src/components/ai-connections/AiConnectionCredentialStep.tsx`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296246147
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790301697163
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790302072481
+      }
+    ],
+    "12.2 Escrever testes de componente para o novo passo (novo arquivo": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296246389
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790305857885
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790306506397
+      }
+    ],
+    "12.3 Revisar `ui/src/components/AgentConfigForm.tsx`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296246677
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790301698977
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790302074311
+      }
+    ],
+    "12.4 Escrever/estender testes de componente para o seletor de combo em `AgentConfigForm`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296246936
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790305859704
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790306508240
+      }
+    ],
+    "13.1 Tratar conexões Databricks legadas (`method: \"api_key\"`) em `server/src/services/ai-connections.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296247233
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790302102036
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790305839053
+      }
+    ],
+    "13.2 Escrever teste unitário em `server/src/__tests__/ai-connections.test.ts`": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296247475
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790307426191
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790307788190
+      }
+    ],
+    "13.3 Atualizar documentação": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296247725
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790306531963
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790307424365
+      }
+    ],
+    "14. Checkpoint final — Garantir que toda a suíte (contratos, servidor, adapter, UI,": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790296247960
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790308282595
+      },
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790308664815
+      }
+    ],
+    "1. Contratos compartilhados para OAuth M2M": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298220559
+      }
+    ],
+    "8. Payload de provider do adapter `codex_local` (auth.command)": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298222272
+      }
+    ],
+    "9. Helper binário `auth.command` (OAuth M2M standalone)": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790298223707
+      }
+    ],
+    "3. Serviço de conexão: resolução de credencial OAuth M2M e ciclo de vida": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790301700813
+      }
+    ],
+    "2. Serviço de troca/cache de token OAuth M2M": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790301702635
+      }
+    ],
+    "7. Runtime de execução: arquivo de credencial efêmero e dica de provider": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790305840886
+      }
+    ],
+    "5. Validação de credencial OAuth M2M na camada de rotas": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790307422548
+      }
+    ],
+    "4. Serviço de descoberta: integração OAuth, chave de cache, paginação, normalização de rótulo": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790307428011
+      }
+    ],
+    "10. Readiness, auth-check e probe de conectividade": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790307429840
+      }
+    ],
+    "13. Compatibilidade com conexões existentes e documentação": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790307791808
+      }
+    ],
+    "12. Interface: passo de conexão Databricks dedicado e seletor de combo": [
+      {
+        "executionId": "03d439a0-fb2e-483b-9d0c-8cb49ad05c7e",
+        "chatSessionId": "sess_1d32aa57-2511-4ea0-bbc9-14f2c9b95380",
+        "timestamp": 1790308686034
+      }
+    ]
+  }
+}

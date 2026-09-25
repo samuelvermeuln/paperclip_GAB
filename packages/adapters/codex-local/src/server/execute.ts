@@ -196,11 +196,11 @@ export function resolveCodexBillingType(
   env: Record<string, string>,
   isDatabricksActive: boolean,
 ): "api" | "subscription" {
-  // A Databricks-active run authenticates via DATABRICKS_TOKEN (never
-  // OPENAI_API_KEY) and is an API-key-style billing relationship, not a
-  // ChatGPT subscription -- same class of credential-readiness check as
-  // `evaluateCodexCredentialReadiness` (codex-home.ts), which already treats
-  // a non-empty DATABRICKS_TOKEN as sufficient without OPENAI_API_KEY.
+  // A Databricks-active run authenticates through the Unity Gateway's external
+  // OAuth M2M helper (never OPENAI_API_KEY) and is an API-key-style billing
+  // relationship, not a ChatGPT subscription. `isDatabricksActive` is derived
+  // from the run's `providerRuntimeHint` (provider === "databricks"), not from
+  // any configured DATABRICKS_TOKEN, which no longer exists for this provider.
   if (isDatabricksActive) return "api";
   // Codex uses API-key auth when OPENAI_API_KEY is present; otherwise rely on local login/session auth.
   return hasNonEmptyEnvValue(env, "OPENAI_API_KEY") ? "api" : "subscription";
@@ -413,8 +413,14 @@ export async function assertCodexCredentialsLaunchable(input: {
    * binding for this run is Databricks. Passed explicitly because this gate
    * runs before `PAPERCLIP_CODEX_PROVIDERS` is generated from that hint. */
   activeProvider?: string | null;
-  /** Resolved `config.env.DATABRICKS_TOKEN` for this run, if any. */
-  configuredDatabricksToken?: string | null;
+  /** `config.providerRuntimeHint.authCommand` for this run — the absolute path
+   * of the Databricks OAuth helper. Present signals a configured helper; the
+   * credential value is never read. */
+  databricksAuthCommand?: string | null;
+  /** Resolved `config.env.DATABRICKS_CREDENTIAL_FILE` for this run, if any — the
+   * `0600` credential file the OAuth helper reads. Readiness checks it exists
+   * and is readable, never its contents. */
+  databricksCredentialFile?: string | null;
 }): Promise<void> {
   const credentialReadiness = await evaluateCodexCredentialReadiness({
     env: input.env ?? process.env,
@@ -422,7 +428,8 @@ export async function assertCodexCredentialsLaunchable(input: {
     configuredCodexHome: input.configuredCodexHome,
     configuredApiKey: input.configuredApiKey,
     activeProvider: input.activeProvider,
-    configuredDatabricksToken: input.configuredDatabricksToken,
+    databricksAuthCommand: input.databricksAuthCommand,
+    databricksCredentialFile: input.databricksCredentialFile,
   });
   if (!credentialReadiness.managed || credentialReadiness.ready) return;
 
@@ -687,9 +694,16 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     await ensureAbsoluteDirectory(cwd, { createIfMissing: true });
   }
   const providerRuntimeHint = readDatabricksProviderRuntimeHint(config);
-  const configuredDatabricksToken =
-    typeof envConfig.DATABRICKS_TOKEN === "string" && envConfig.DATABRICKS_TOKEN.trim().length > 0
-      ? envConfig.DATABRICKS_TOKEN.trim()
+  // Databricks readiness no longer keys off a static DATABRICKS_TOKEN. The run
+  // authenticates through the external OAuth M2M helper, so readiness is: the
+  // helper command is configured (from the provider hint) and the ephemeral
+  // credential file the runtime wrote is present and readable. Only its path is
+  // read here; the clientSecret it holds is never opened.
+  const databricksAuthCommand = providerRuntimeHint?.authCommand ?? null;
+  const databricksCredentialFile =
+    typeof envConfig.DATABRICKS_CREDENTIAL_FILE === "string" &&
+    envConfig.DATABRICKS_CREDENTIAL_FILE.trim().length > 0
+      ? envConfig.DATABRICKS_CREDENTIAL_FILE.trim()
       : null;
   const configuredOpenAiApiKey =
     typeof envConfig.OPENAI_API_KEY === "string" && envConfig.OPENAI_API_KEY.trim().length > 0
@@ -766,7 +780,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     cwd,
     onLog,
     activeProvider: providerRuntimeHint?.provider,
-    configuredDatabricksToken,
+    databricksAuthCommand,
+    databricksCredentialFile,
   });
   // Merge custom model providers (PAPERCLIP_CODEX_PROVIDERS) into the managed
   // CODEX_HOME's config.toml BEFORE the home is shipped to a remote execution
@@ -782,8 +797,8 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
   // attaches a `providerRuntimeHint` to `config`. Build the
   // PAPERCLIP_CODEX_PROVIDERS payload from it here, taking precedence over any
   // pre-existing value, so this run's Codex process talks to the workspace's
-  // Unity Gateway (`<host>/ai-gateway/codex/v1`) instead of OpenAI, via
-  // env_key = "DATABRICKS_TOKEN" indirection only -- never the literal token.
+  // Unity Gateway (`<host>/ai-gateway/codex/v1`) instead of OpenAI, via an
+  // external `auth.command` OAuth M2M helper -- never a literal/static token.
   const envConfigStrings = buildDatabricksProviderRuntimeEnv(
     envConfigStringsBeforeProviderHint,
     config,

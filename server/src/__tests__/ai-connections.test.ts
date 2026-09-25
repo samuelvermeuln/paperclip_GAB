@@ -8,12 +8,11 @@ import { mkdtemp, rm, access, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { and, eq, sql } from "drizzle-orm";
-import { createDb, companies, agents, heartbeatRuns, heartbeatRunEvents, companyMemberships, connectionGrants, connectionGrantDelegations, connectionGrantMembers, toolConnections, toolConnectionInstalls, aiConnectionDefaults, aiProviderDefaults, adapterAuthSessions, environments, issues, issueThreadInteractions, issueRecoveryActions, connectionIntentDeliveries, agentWakeupRequests, companySecrets, activityLog } from "@paperclipai/db";
-import { appendHeartbeatRunEvent } from "../services/heartbeat-run-events.js";
-import { logActivity } from "../services/activity-log.js";
+import { createDb, companies, agents, heartbeatRuns, companyMemberships, connectionGrants, connectionGrantDelegations, connectionGrantMembers, toolConnections, toolConnectionInstalls, aiConnectionDefaults, aiProviderDefaults, adapterAuthSessions, environments, issues, issueThreadInteractions, issueRecoveryActions, connectionIntentDeliveries, agentWakeupRequests, companySecrets, activityLog } from "@paperclipai/db";
 import { startEmbeddedPostgresTestDatabase } from "@paperclipai/db/test-embedded-postgres";
 import { aiConnectionService } from "../services/ai-connections.js";
-import { listDatabricksModelServices, DatabricksDiscoveryError } from "../services/databricks-model-services.js";
+import { listDatabricksModelServices, invalidateDatabricksModelServiceCache, DatabricksDiscoveryError } from "../services/databricks-model-services.js";
+import { resolveDatabricksAccessToken, fetchDatabricksAccessToken, invalidateDatabricksAccessToken } from "../services/databricks-oauth.js";
 import * as executionTarget from "@paperclipai/adapter-utils/execution-target";
 import { prepareManagedAiRuntime, assertManagedAiProjectAuth, stripAiAuthBindings } from "../services/ai-connection-runtime.js";
 import { toolAccessService } from "../services/tool-access.js";
@@ -36,6 +35,41 @@ let service: ReturnType<typeof aiConnectionService>;
 const binding = { provider: "anthropic", method: "api_key", mode: "responsible_user" } as const;
 const input = { companyId, agentId, adapterType: "claude_local", binding };
 const create = (userId: string, name: string, ownership: "personal" | "shared" = "personal") => service.save(companyId, userId, { provider: "anthropic", method: "api_key", ownership, name, apiKey: "fixture", agentIds: [], allAgents: true }, `fixture-${name}`);
+
+/** A successful Databricks OIDC client-credentials token response. */
+const databricksAccessTokenResponse = () =>
+  new Response(JSON.stringify({ access_token: "fixture-access-token", expires_in: 3600 }), { status: 200 });
+
+/**
+ * Builds a `fetch` implementation for Databricks tests. The OAuth M2M token
+ * exchange (`POST {host}/oidc/v1/token`) always succeeds; every Unity Catalog
+ * model-services request is delegated to `onModelServices`. Discovery and
+ * create-time credential validation now resolve a short-lived access token
+ * before calling Unity Catalog, so a mock must answer both hops.
+ */
+const databricksFetchImpl = (
+  onModelServices: (url: URL) => Response,
+): ((input: Parameters<typeof fetch>[0]) => Promise<Response>) =>
+  async (input) => {
+    const url = new URL(String(input));
+    if (url.pathname.endsWith("/oidc/v1/token")) return databricksAccessTokenResponse();
+    return onModelServices(url);
+  };
+
+/** New-contract Databricks connection payload (OAuth M2M clientId/clientSecret). */
+const databricksCreateInput = (name: string, ownership: "personal" | "shared" = "personal") => ({
+  provider: "databricks" as const,
+  method: "oauth_m2m" as const,
+  ownership,
+  name,
+  clientId: "dbx-client-id",
+  clientSecret: `secret-${name}`,
+  agentIds: [] as string[],
+  allAgents: true,
+  workspaceHost: "https://acme.cloud.databricks.com",
+  catalog: "main",
+  schema: "paperclip",
+});
 
 beforeAll(async () => {
   home = await mkdtemp(path.join(os.tmpdir(), "paperclip-ai-tests-"));
@@ -513,7 +547,7 @@ describe("managed AI connections", () => {
       expect(network).not.toHaveBeenCalled();
     } finally { network.mockRestore(); }
   });
-  it("validates a Databricks PAT live at connection-creation time before saving", async () => {
+  it("validates a Databricks OAuth M2M credential live at connection-creation time before saving", async () => {
     const app = express();
     app.use(express.json());
     app.use((req, _res, next) => {
@@ -525,10 +559,11 @@ describe("managed AI connections", () => {
     const base = `/api/companies/${companyId}/ai-connections`;
     const payload = {
       provider: "databricks",
-      method: "api_key",
+      method: "oauth_m2m",
       name: "Databricks fixture",
       ownership: "personal",
-      apiKey: "dapi-fixture-token",
+      clientId: "dbx-client-id",
+      clientSecret: "dbx-client-secret",
       allAgents: false,
       agentIds: [],
       workspaceHost: "https://acme.cloud.databricks.com",
@@ -537,15 +572,20 @@ describe("managed AI connections", () => {
     };
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     try {
-      fetchSpy.mockResolvedValueOnce(new Response("unauthorized", { status: 401 }));
-      const rejected = await request(app).post(base).send({ ...payload, name: "Databricks rejected" });
+      // Databricks rejects the client-credentials exchange (401 at the token
+      // endpoint): the create route maps it to a 422 without persisting anything.
+      fetchSpy.mockImplementation(databricksFetchImpl(() => new Response(null, { status: 200 })));
+      fetchSpy.mockImplementationOnce(async () => new Response(null, { status: 401 }));
+      const rejected = await request(app).post(base).send({ ...payload, name: "Databricks rejected", clientSecret: "wrong-secret" });
       expect(rejected.status).toBe(422);
-      expect(rejected.body.error).toContain("rejected this API key");
+      expect(rejected.body.error).toContain("rejected");
       expect((await service.list(companyId, "alice")).some(c => c.name === "Databricks rejected")).toBe(false);
 
-      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ model_services: [] }), { status: 200 }));
+      // A valid credential: token exchange succeeds, then a single Unity Catalog page.
+      fetchSpy.mockImplementation(databricksFetchImpl(() => new Response(JSON.stringify({ model_services: [] }), { status: 200 })));
       const created = await request(app).post(base).send(payload);
-      expect(created.status).toBe(201);
+      expect(created.status, JSON.stringify(created.body)).toBe(201);
+      expect(JSON.stringify(created.body)).not.toContain("dbx-client-secret");
       expect((await service.list(companyId, "alice")).some(c => c.name === "Databricks fixture")).toBe(true);
     } finally { fetchSpy.mockRestore(); }
   });
@@ -558,9 +598,10 @@ describe("managed AI connections", () => {
     const base = `/api/companies/${companyId}/ai-connections`;
     const payload = {
       provider: "databricks",
-      method: "api_key",
+      method: "oauth_m2m",
       ownership: "personal",
-      apiKey: "dapi-fixture-token",
+      clientId: "dbx-client-id",
+      clientSecret: "dbx-client-secret",
       allAgents: false,
       agentIds: [],
       workspaceHost: "https://not-allowlisted.cloud.databricks.com",
@@ -568,6 +609,7 @@ describe("managed AI connections", () => {
       schema: "paperclip",
     };
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("must not reach provider"));
+    const allowServices = () => fetchSpy.mockImplementation(databricksFetchImpl(() => new Response(JSON.stringify({ model_services: [] }), { status: 200 })));
     try {
       // SaaS deployment, host not on the allowlist: rejected before the live credential check.
       const saasApp = express();
@@ -592,7 +634,7 @@ describe("managed AI connections", () => {
       }));
       allowlistedApp.use(errorMiddleware);
       fetchSpy.mockReset();
-      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ model_services: [] }), { status: 200 }));
+      allowServices();
       const allowed = await request(allowlistedApp).post(base).send({ ...payload, name: "Allowlisted host" });
       expect(allowed.status).toBe(201);
       expect((await service.list(companyId, "alice")).some(c => c.name === "Allowlisted host")).toBe(true);
@@ -604,7 +646,7 @@ describe("managed AI connections", () => {
       localApp.use("/api", aiConnectionRoutes(db));
       localApp.use(errorMiddleware);
       fetchSpy.mockReset();
-      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ model_services: [] }), { status: 200 }));
+      allowServices();
       const localCreated = await request(localApp).post(base).send({ ...payload, name: "Local deployment host" });
       expect(localCreated.status).toBe(201);
       expect((await service.list(companyId, "alice")).some(c => c.name === "Local deployment host")).toBe(true);
@@ -620,7 +662,7 @@ describe("managed AI connections", () => {
       }));
       overrideApp.use(errorMiddleware);
       fetchSpy.mockReset();
-      fetchSpy.mockResolvedValueOnce(new Response(JSON.stringify({ model_services: [] }), { status: 200 }));
+      allowServices();
       const overrideCreated = await request(overrideApp).post(base).send({ ...payload, name: "Private hosts override" });
       expect(overrideCreated.status).toBe(201);
       expect((await service.list(companyId, "alice")).some(c => c.name === "Private hosts override")).toBe(true);
@@ -886,68 +928,41 @@ describe("managed AI connections", () => {
   }, 30000);
 
   describe("resolveDatabricksCredential", () => {
-    const createDatabricks = (userId: string, name: string, ownership: "personal" | "shared" = "personal") =>
-      service.save(
-        companyId,
-        userId,
-        {
-          provider: "databricks",
-          method: "api_key",
-          ownership,
-          name,
-          apiKey: "fixture",
-          agentIds: [],
-          allAgents: true,
-          workspaceHost: "https://acme.cloud.databricks.com",
-          catalog: "main",
-          schema: "paperclip",
-        },
-        `fixture-${name}`,
-      );
+    const createDatabricks = (userId: string, name: string, ownership: "personal" | "shared" = "personal", forCompanyId = companyId) =>
+      service.save(forCompanyId, userId, databricksCreateInput(name, ownership), "unused-for-databricks");
 
-    it("resolves a credential for the owning grant's personal connection without leaking the token in serialized output", async () => {
+    it("resolves the OAuth M2M credential for the owning grant's personal connection without leaking the client secret", async () => {
       const userId = "databricks-personal-user";
       await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
       const account = await createDatabricks(userId, "Databricks personal");
       const resolved = await service.resolveDatabricksCredential(companyId, account.connectionId, userId);
       expect(resolved.ok).toBe(true);
       if (!resolved.ok) throw new Error("expected ok resolution");
-      expect(resolved.credential.token).toBe(`fixture-Databricks personal`);
+      expect(resolved.credential.clientId).toBe("dbx-client-id");
+      expect(resolved.credential.clientSecret).toBe("secret-Databricks personal");
+      expect(resolved.credential.credentialVersion).toEqual(expect.any(String));
       expect(resolved.attribution).toMatchObject({ connectionId: account.connectionId, grantId: account.grantId, provider: "databricks" });
-      // The token must never appear in a JSON-serialized view of anything but
-      // the credential field itself (e.g. the attribution, or a route response).
-      expect(JSON.stringify(resolved.attribution)).not.toContain(resolved.credential.token);
-      // Broaden the check to the entire resolution result: every field other
-      // than `credential.token` itself (attribution, and the non-token
-      // credential fields host/catalog/schema) must never equal or contain
-      // the token value, however the result is serialized to a client-facing
-      // surface in the future (e.g. a route response body).
-      const { token, ...credentialWithoutToken } = resolved.credential;
-      expect(JSON.stringify({ attribution: resolved.attribution, credential: credentialWithoutToken })).not.toContain(token);
-      expect(credentialWithoutToken).toEqual({ host: "https://acme.cloud.databricks.com", catalog: "main", schema: "paperclip", modelPrefix: undefined });
+      // The client secret must never appear in any serialized view other than
+      // `credential.clientSecret` itself — not in the attribution, not in the
+      // non-secret credential fields (host/catalog/schema/clientId/version),
+      // however the result is later serialized to a client-facing surface.
+      const { clientSecret, ...credentialWithoutSecret } = resolved.credential;
+      expect(JSON.stringify({ attribution: resolved.attribution, credential: credentialWithoutSecret })).not.toContain(clientSecret);
+      expect(credentialWithoutSecret).toEqual({
+        clientId: "dbx-client-id",
+        host: "https://acme.cloud.databricks.com",
+        catalog: "main",
+        schema: "paperclip",
+        modelPrefix: undefined,
+        credentialVersion: resolved.credential.credentialVersion,
+      });
     });
 
     it("returns connection_missing for a connectionId belonging to a different company, without revealing existence", async () => {
       const userId = "databricks-cross-company-user";
       await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
       await db.insert(companyMemberships).values({ companyId: otherCompanyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
-      const otherCompanyAccount = await service.save(
-        otherCompanyId,
-        userId,
-        {
-          provider: "databricks",
-          method: "api_key",
-          ownership: "personal",
-          name: "Other company databricks",
-          apiKey: "fixture",
-          agentIds: [],
-          allAgents: true,
-          workspaceHost: "https://acme.cloud.databricks.com",
-          catalog: "main",
-          schema: "paperclip",
-        },
-        "fixture-other-company",
-      );
+      const otherCompanyAccount = await createDatabricks(userId, "Other company databricks", "personal", otherCompanyId);
       const resolvedFromWrongCompany = await service.resolveDatabricksCredential(companyId, otherCompanyAccount.connectionId, userId);
       expect(resolvedFromWrongCompany).toEqual({ ok: false, reason: "connection_missing", message: expect.any(String) });
       // Same failure shape as a connectionId that never existed at all — the
@@ -968,7 +983,7 @@ describe("managed AI connections", () => {
       expect(resolvedNoUser).toEqual({ ok: false, reason: "access_denied", message: expect.any(String) });
     });
 
-    it("denies a revoked connection's grant with connection_unavailable and does not resolve the token", async () => {
+    it("denies a revoked connection's grant with connection_unavailable and does not resolve the credential", async () => {
       const userId = "databricks-revoked-user";
       await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
       const account = await createDatabricks(userId, "Databricks revoked");
@@ -987,230 +1002,65 @@ describe("managed AI connections", () => {
       expect((await service.resolveDatabricksCredential(companyId, account.connectionId, member)).ok).toBe(true);
       expect(await service.resolveDatabricksCredential(companyId, account.connectionId, outsider)).toEqual({ ok: false, reason: "access_denied", message: expect.any(String) });
     });
-  });
 
-  describe("prepareManagedAiRuntime with a Databricks connection", () => {
-    const createDatabricks = (userId: string, name: string) =>
-      service.save(
-        companyId,
-        userId,
-        {
-          provider: "databricks",
-          method: "api_key",
-          ownership: "personal",
-          name,
-          apiKey: "fixture",
-          agentIds: [],
-          allAgents: true,
-          workspaceHost: "https://acme.cloud.databricks.com",
-          catalog: "main",
-          schema: "paperclip",
-        },
-        `fixture-${name}`,
-      );
-
-    it("injects DATABRICKS_TOKEN into the run env and returns a providerRuntimeHint, without leaking the token elsewhere", async () => {
-      const userId = "databricks-runtime-user";
+    it("classifies a legacy api_key Databricks connection as needing reconnection without exchanging the stored PAT", async () => {
+      const userId = "databricks-legacy-api-key-user";
       await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
-      const account = await createDatabricks(userId, "Databricks runtime");
-      const binding = { provider: "databricks", method: "api_key", mode: "responsible_user" } as const;
-      const runtime = await prepareManagedAiRuntime(db, {
-        companyId,
-        agentId,
-        responsibleUserId: userId,
-        adapterType: "codex_local",
-        binding,
-        config: { model: "main.paperclip.combo_ux" },
-      });
+      const account = await createDatabricks(userId, "Databricks legacy api_key");
+      // Reproduce a connection created before this migration: its `config.ai.method`
+      // was persisted as the legacy `api_key` (its secret slot held a raw PAT). The
+      // current `save` path can no longer create that shape — the schema rejects
+      // `api_key` for `databricks` — so rewrite the stored envelope in place to stand
+      // in for a pre-migration row.
+      const [stored] = await db.select().from(toolConnections).where(eq(toolConnections.id, account.connectionId));
+      const legacyConfig = { ...stored.config, ai: { ...(stored.config.ai as Record<string, unknown>), method: "api_key" } };
+      await db.update(toolConnections).set({ config: legacyConfig }).where(eq(toolConnections.id, account.connectionId));
+
+      // The legacy-method guard returns before any credential resolution or network
+      // I/O, so the stored PAT is never traded for an OAuth access token: a fetch
+      // that reaches the provider would throw and any call at all fails the test.
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("must not reach provider"));
       try {
-        const env = runtime.config.env as Record<string, string>;
-        expect(env.DATABRICKS_TOKEN).toBe("fixture-Databricks runtime");
-        expect(runtime.config.providerRuntimeHint).toEqual({
-          provider: "databricks",
-          baseUrl: "https://acme.cloud.databricks.com/ai-gateway/codex/v1",
-          wireApi: "responses",
-        });
-        const token = env.DATABRICKS_TOKEN;
-        const { env: _env, ...configWithoutEnv } = runtime.config;
-        const serializedWithoutEnv = JSON.stringify({
-          ...runtime,
-          config: configWithoutEnv,
-          cleanup: undefined,
-        });
-        expect(serializedWithoutEnv).not.toContain(token);
-        const serializedEnvWithoutToken = JSON.stringify({ ...env, DATABRICKS_TOKEN: undefined });
-        expect(serializedEnvWithoutToken).not.toContain(token);
-      } finally {
-        await expect(runtime.cleanup()).resolves.not.toThrow();
-      }
-    });
-
-    it("never persists the token into heartbeat_run_events or activityLog for a run that used this runtime", async () => {
-      const userId = "databricks-runlog-user";
-      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
-      const account = await createDatabricks(userId, "Databricks run-log fixture");
-      const binding = { provider: "databricks", method: "api_key", mode: "responsible_user" } as const;
-      const runtime = await prepareManagedAiRuntime(db, {
-        companyId,
-        agentId,
-        responsibleUserId: userId,
-        adapterType: "codex_local",
-        binding,
-        config: { model: "main.paperclip.combo_ux" },
-      });
-      const token = (runtime.config.env as Record<string, string>).DATABRICKS_TOKEN;
-      expect(token).toBeTruthy();
-
-      const runId = randomUUID();
-      try {
-        await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, status: "running", responsibleUserId: userId });
-
-        // Shaped like the fields a real run's lifecycle/adapter-invoke event
-        // and activity-log entry actually carry for a Databricks run
-        // (provider, combo id, base_url/wire_api hint) -- i.e. everything
-        // needed to observe what a run used, per Requirement 9.1, built from
-        // prepareManagedAiRuntime's actual output rather than a hand-typed
-        // fixture. Real call sites never place `env` (or any credential
-        // value) into a run-event/activity payload; this test's payload
-        // mirrors that same shape rather than reintroducing the leak this
-        // requirement forbids.
-        const { row } = await appendHeartbeatRunEvent(db, {
-          companyId,
-          runId,
-          agentId,
-          eventType: "adapter.invoke",
-          stream: "system",
-          level: "info",
-          message: `Starting run with provider ${binding.provider}`,
-          payload: {
-            provider: binding.provider,
-            model: runtime.config.model,
-            providerRuntimeHint: runtime.config.providerRuntimeHint,
-          },
-        });
-
-        const persistedEventRows = await db
-          .select()
-          .from(heartbeatRunEvents)
-          .where(eq(heartbeatRunEvents.id, row.id));
-        expect(persistedEventRows).toHaveLength(1);
-        const serializedEvent = JSON.stringify(persistedEventRows[0]);
-        expect(serializedEvent).not.toContain(token);
-
-        const activity = await logActivity(db, {
-          companyId,
-          actorType: "agent",
-          actorId: agentId,
-          action: "run.completed",
-          entityType: "heartbeat_run",
-          entityId: runId,
-          agentId,
-          runId,
-          details: {
-            provider: binding.provider,
-            model: runtime.config.model,
-            providerRuntimeHint: runtime.config.providerRuntimeHint,
-          },
-        });
-
-        const activityRows = await db
-          .select()
-          .from(activityLog)
-          .where(eq(activityLog.id, activity.id));
-        expect(activityRows).toHaveLength(1);
-        const serializedActivity = JSON.stringify(activityRows[0]);
-        expect(serializedActivity).not.toContain(token);
-      } finally {
-        await expect(runtime.cleanup()).resolves.not.toThrow();
-      }
-    });
-
-    it("never persists the token into heartbeat_run_events for a run event classified as an error, e.g. a failed Databricks discovery/execution", async () => {
-      const userId = "databricks-runlog-error-user";
-      await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
-      const account = await createDatabricks(userId, "Databricks run-log error fixture");
-      const binding = { provider: "databricks", method: "api_key", mode: "responsible_user" } as const;
-      const runtime = await prepareManagedAiRuntime(db, {
-        companyId,
-        agentId,
-        responsibleUserId: userId,
-        adapterType: "codex_local",
-        binding,
-        config: { model: "main.paperclip.combo_ux" },
-      });
-      const token = (runtime.config.env as Record<string, string>).DATABRICKS_TOKEN;
-      expect(token).toBeTruthy();
-
-      const runId = randomUUID();
-      try {
-        await db.insert(heartbeatRuns).values({ id: runId, companyId, agentId, status: "running", responsibleUserId: userId });
-
-        // Simulate a failed Databricks discovery/execution surfaced as an
-        // error-classified lifecycle event, per Requirement 9.4. Real call
-        // sites never place `env` (or any credential value) into the
-        // error message or payload; this mirrors a genuine
-        // `DatabricksDiscoveryError` (invalid_credential/401) the way
-        // execution code paths report it, to confirm the token is absent
-        // from this classification too, not just the success path.
-        const discoveryError = new DatabricksDiscoveryError(
-          "invalid_credential",
-          "Databricks rejected the connection's credential",
-        );
-        const { row } = await appendHeartbeatRunEvent(db, {
-          companyId,
-          runId,
-          agentId,
-          eventType: "lifecycle",
-          stream: "system",
-          level: "error",
-          message: `Databricks ${discoveryError.kind}: ${discoveryError.message}`,
-          payload: {
-            provider: binding.provider,
-            model: runtime.config.model,
-            providerRuntimeHint: runtime.config.providerRuntimeHint,
-            errorKind: discoveryError.kind,
-          },
-        });
-
-        const persistedEventRows = await db
-          .select()
-          .from(heartbeatRunEvents)
-          .where(eq(heartbeatRunEvents.id, row.id));
-        expect(persistedEventRows).toHaveLength(1);
-        expect(persistedEventRows[0]).toMatchObject({ eventType: "lifecycle", level: "error" });
-        const serializedErrorEvent = JSON.stringify(persistedEventRows[0]);
-        expect(serializedErrorEvent).not.toContain(token);
-      } finally {
-        await expect(runtime.cleanup()).resolves.not.toThrow();
-      }
+        const resolved = await service.resolveDatabricksCredential(companyId, account.connectionId, userId);
+        expect(resolved).toEqual({ ok: false, reason: "connection_unavailable", message: expect.any(String) });
+        if (resolved.ok) throw new Error("expected a classified reconnect failure");
+        expect(resolved.message).toMatch(/reconnect/i);
+        expect(resolved.message).toMatch(/client id/i);
+        expect(resolved.message).toMatch(/client secret/i);
+        expect(fetchSpy).not.toHaveBeenCalled();
+      } finally { fetchSpy.mockRestore(); }
     });
   });
+
+  // NOTE: The former "prepareManagedAiRuntime with a Databricks connection"
+  // block asserted the legacy `env.DATABRICKS_TOKEN` injection and the old
+  // three-field `providerRuntimeHint`. Under the OAuth M2M migration, the
+  // runtime no longer injects a static token into the process environment —
+  // it writes an ephemeral credential file and configures an `auth.command`
+  // helper. That new runtime behavior (credential-file creation, 0600
+  // permissions, cleanup, no secret in logs/events/config) is owned and
+  // exercised by task 7 in `server/src/__tests__/agent-hire-ai-connections.test.ts`,
+  // so the obsolete token-injection tests are removed here rather than left
+  // asserting behavior the migration deletes.
 
   describe("Databricks connection edit/revoke cache invalidation and activity logging", () => {
     const createDatabricks = (userId: string, name: string) =>
-      service.save(
-        companyId,
-        userId,
-        {
-          provider: "databricks",
-          method: "api_key",
-          ownership: "personal",
-          name,
-          apiKey: "fixture",
-          agentIds: [],
-          allAgents: true,
-          workspaceHost: "https://acme.cloud.databricks.com",
-          catalog: "main",
-          schema: "paperclip",
-        },
-        `fixture-${name}`,
-      );
+      service.save(companyId, userId, databricksCreateInput(name), "unused-for-databricks");
 
+    /** Runs a full discovery for a connection, threading the resolved
+     * `credentialVersion` into the cache key exactly as the real route does. */
     async function populateCache(connectionId: string, userId: string) {
       const resolved = await service.resolveDatabricksCredential(companyId, connectionId, userId);
       if (!resolved.ok) throw new Error("expected ok resolution");
       await listDatabricksModelServices(
-        { companyId, connectionId, host: resolved.credential.host, catalog: resolved.credential.catalog, schema: resolved.credential.schema },
+        {
+          companyId,
+          connectionId,
+          credentialVersion: resolved.credential.credentialVersion,
+          host: resolved.credential.host,
+          catalog: resolved.credential.catalog,
+          schema: resolved.credential.schema,
+        },
         resolved.credential,
       );
     }
@@ -1220,39 +1070,33 @@ describe("managed AI connections", () => {
       await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
       const account = await createDatabricks(userId, "Databricks edit target");
 
-      const fetchSpy = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ model_services: [] }), { status: 200 }));
+      // Count Unity Catalog page requests only; each discovery also performs an
+      // OAuth token exchange, so total fetch calls are not a stable signal.
+      let pageCalls = 0;
+      const fetchSpy = vi.fn(databricksFetchImpl(() => {
+        pageCalls += 1;
+        return new Response(JSON.stringify({ model_services: [] }), { status: 200 });
+      }));
       vi.stubGlobal("fetch", fetchSpy);
       try {
         await populateCache(account.connectionId, userId);
-        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        expect(pageCalls).toBe(1);
         // A second discovery within the TTL should be served from cache.
         await populateCache(account.connectionId, userId);
-        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        expect(pageCalls).toBe(1);
 
         await service.save(
           companyId,
           userId,
-          {
-            connectionId: account.connectionId,
-            provider: "databricks",
-            method: "api_key",
-            ownership: "personal",
-            name: "Databricks edit target",
-            apiKey: "fixture",
-            agentIds: [],
-            allAgents: true,
-            workspaceHost: "https://acme.cloud.databricks.com",
-            catalog: "main",
-            schema: "paperclip2",
-          },
-          "fixture-Databricks edit target",
+          { ...databricksCreateInput("Databricks edit target"), connectionId: account.connectionId, schema: "paperclip2" },
+          "unused-for-databricks",
         );
 
-        // The edit must have invalidated the cache: the next discovery call
-        // for this connection issues a fresh request instead of reusing the
-        // pre-edit cached result.
+        // The edit rotates the secret (bumping credentialVersion) and
+        // invalidates both caches: the next discovery issues a fresh Unity
+        // Catalog request instead of reusing the pre-edit cached result.
         await populateCache(account.connectionId, userId);
-        expect(fetchSpy).toHaveBeenCalledTimes(2);
+        expect(pageCalls).toBe(2);
       } finally {
         vi.unstubAllGlobals();
       }
@@ -1263,7 +1107,8 @@ describe("managed AI connections", () => {
         .where(and(eq(activityLog.entityId, account.connectionId), eq(activityLog.action, "ai_connection.reconnected")));
       expect(entries).toHaveLength(1);
       expect(entries[0]).toMatchObject({ companyId, actorId: userId, entityType: "tool_connection" });
-      expect(JSON.stringify(entries[0]?.details ?? {})).not.toContain("fixture-Databricks edit target");
+      // The activity log must never carry the client secret.
+      expect(JSON.stringify(entries[0]?.details ?? {})).not.toContain("secret-Databricks edit target");
     });
 
     it("invalidates the cached combo list and writes an activity log entry when a Databricks connection is revoked", async () => {
@@ -1271,11 +1116,15 @@ describe("managed AI connections", () => {
       await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
       const account = await createDatabricks(userId, "Databricks revoke target");
 
-      const fetchSpy = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ model_services: [] }), { status: 200 }));
+      let pageCalls = 0;
+      const fetchSpy = vi.fn(databricksFetchImpl(() => {
+        pageCalls += 1;
+        return new Response(JSON.stringify({ model_services: [] }), { status: 200 });
+      }));
       vi.stubGlobal("fetch", fetchSpy);
       try {
         await populateCache(account.connectionId, userId);
-        expect(fetchSpy).toHaveBeenCalledTimes(1);
+        expect(pageCalls).toBe(1);
 
         const app = express();
         app.use(express.json());
@@ -1290,8 +1139,8 @@ describe("managed AI connections", () => {
         );
         expect(revokeResponse.status).toBe(200);
         // The revoke route's own response body is a client-visible surface;
-        // it must never echo the connection's token.
-        expect(JSON.stringify(revokeResponse.body)).not.toContain("fixture-Databricks revoke target");
+        // it must never echo the connection's client secret.
+        expect(JSON.stringify(revokeResponse.body)).not.toContain("secret-Databricks revoke target");
 
         // A revoked connection denies resolution outright (Requirement 3.3), so
         // cache invalidation is observed by asserting discovery can no longer be
@@ -1316,23 +1165,7 @@ describe("managed AI connections", () => {
 
   describe("GET /companies/:companyId/adapters/:type/models?provider=databricks", () => {
     const createDatabricks = (userId: string, name: string, ownership: "personal" | "shared" = "personal", forCompanyId = companyId) =>
-      service.save(
-        forCompanyId,
-        userId,
-        {
-          provider: "databricks",
-          method: "api_key",
-          ownership,
-          name,
-          apiKey: "fixture",
-          agentIds: [],
-          allAgents: true,
-          workspaceHost: "https://acme.cloud.databricks.com",
-          catalog: "main",
-          schema: "paperclip",
-        },
-        `fixture-${name}`,
-      );
+      service.save(forCompanyId, userId, databricksCreateInput(name, ownership), "unused-for-databricks");
 
     async function buildApp(userId: string) {
       const { agentRoutes } = await import("../routes/agents.js");
@@ -1389,16 +1222,16 @@ describe("managed AI connections", () => {
       const userId = "databricks-route-success";
       await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
       const account = await createDatabricks(userId, "Databricks route success");
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-        new Response(JSON.stringify({ model_services: [{ name: "model-services/main.paperclip.combo_ux" }] }), { status: 200 }),
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+        databricksFetchImpl(() => new Response(JSON.stringify({ model_services: [{ name: "model-services/main.paperclip.combo_ux" }] }), { status: 200 })),
       );
       try {
         const app = await buildApp(userId);
         const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${account.connectionId}`);
         expect(res.status, JSON.stringify(res.body)).toBe(200);
         expect(res.body).toEqual([{ id: "main.paperclip.combo_ux", label: "Combo Ux" }]);
-        // Never leaks host/catalog/schema/token alongside the id/label pair.
-        expect(JSON.stringify(res.body)).not.toContain("fixture-Databricks route success");
+        // Never leaks host/catalog/schema/secret alongside the id/label pair.
+        expect(JSON.stringify(res.body)).not.toContain("secret-Databricks route success");
         expect(JSON.stringify(res.body)).not.toContain("acme.cloud.databricks.com");
       } finally { fetchSpy.mockRestore(); }
     });
@@ -1407,8 +1240,8 @@ describe("managed AI connections", () => {
       const userId = "databricks-route-shape";
       await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
       const account = await createDatabricks(userId, "Databricks route shape");
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-        new Response(
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+        databricksFetchImpl(() => new Response(
           JSON.stringify({
             model_services: [
               { name: "model-services/main.paperclip.combo_ux" },
@@ -1417,7 +1250,7 @@ describe("managed AI connections", () => {
             ],
           }),
           { status: 200 },
-        ),
+        )),
       );
       try {
         const app = await buildApp(userId);
@@ -1454,7 +1287,8 @@ describe("managed AI connections", () => {
       const userId = "databricks-route-invalid-credential";
       await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
       const account = await createDatabricks(userId, "Databricks route invalid credential");
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 401 }));
+      // Token exchange succeeds; the Unity Catalog call itself is rejected 401.
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(databricksFetchImpl(() => new Response(null, { status: 401 })));
       try {
         const app = await buildApp(userId);
         const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${account.connectionId}`);
@@ -1466,7 +1300,7 @@ describe("managed AI connections", () => {
       const userId = "databricks-route-insufficient-permission";
       await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
       const account = await createDatabricks(userId, "Databricks route insufficient permission");
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 403 }));
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(databricksFetchImpl(() => new Response(null, { status: 403 })));
       try {
         const app = await buildApp(userId);
         const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${account.connectionId}`);
@@ -1478,8 +1312,8 @@ describe("managed AI connections", () => {
       const userId = "databricks-route-rate-limited";
       await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
       const account = await createDatabricks(userId, "Databricks route rate limited");
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-        new Response(null, { status: 429, headers: { "retry-after": "30" } }),
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+        databricksFetchImpl(() => new Response(null, { status: 429, headers: { "retry-after": "30" } })),
       );
       try {
         const app = await buildApp(userId);
@@ -1493,7 +1327,7 @@ describe("managed AI connections", () => {
       const userId = "databricks-route-workspace-5xx";
       await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
       const account = await createDatabricks(userId, "Databricks route workspace 5xx");
-      const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(null, { status: 503 }));
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(databricksFetchImpl(() => new Response(null, { status: 503 })));
       try {
         const app = await buildApp(userId);
         const res = await request(app).get(`/api/companies/${companyId}/adapters/codex_local/models?provider=databricks&connectionId=${account.connectionId}`);
@@ -1551,11 +1385,224 @@ describe("managed AI connections", () => {
         // real message), and never includes a credential value.
         expect(fetchSpy).not.toHaveBeenCalled();
         expect(JSON.stringify(res.body)).not.toContain("acme.cloud.databricks.com");
-        expect(JSON.stringify(res.body)).not.toContain("fixture-Databricks route malformed host");
+        expect(JSON.stringify(res.body)).not.toContain("secret-Databricks route malformed host");
       } finally {
         discoverySpy.mockRestore();
         fetchSpy.mockRestore();
       }
+    });
+  });
+});
+
+
+// Property 2: a credential, an OAuth M2M access token, or a combo list resolved
+// for company A is never returned, reused, or made visible to a company B
+// request. The credential path scopes every lookup by companyId first; the
+// token and combo caches are keyed by companyId so no cross-company entry is
+// ever a cache hit for another company.
+describe("Databricks multi-tenant isolation (Property 2)", () => {
+  it("never resolves company A's credential for a company B request and reports it identically to a nonexistent connection", async () => {
+    const userA = "dbx-iso-user-a";
+    const userB = "dbx-iso-user-b";
+    await db.insert(companyMemberships).values([
+      { companyId, principalId: userA, principalType: "user", status: "active", membershipRole: "member" },
+      { companyId: otherCompanyId, principalId: userB, principalType: "user", status: "active", membershipRole: "member" },
+    ]);
+    const accountA = await service.save(companyId, userA, databricksCreateInput("Company A Databricks"), "unused-for-databricks");
+
+    // Company A resolves its own connection.
+    expect((await service.resolveDatabricksCredential(companyId, accountA.connectionId, userA)).ok).toBe(true);
+
+    // Company B asking for company A's connectionId gets connection_missing —
+    // byte-for-byte identical to a connectionId that never existed. Nothing in
+    // the result distinguishes "exists in another company" from "never existed".
+    const crossCompany = await service.resolveDatabricksCredential(otherCompanyId, accountA.connectionId, userB);
+    const nonexistent = await service.resolveDatabricksCredential(otherCompanyId, randomUUID(), userB);
+    expect(crossCompany).toEqual({ ok: false, reason: "connection_missing", message: expect.any(String) });
+    expect(crossCompany).toEqual(nonexistent);
+  });
+
+  it("keys the OAuth access-token cache by companyId so company B never receives company A's cached token", async () => {
+    const connectionId = randomUUID();
+    const host = "https://acme.cloud.databricks.com";
+    const credential = { host, clientId: "shared-client-id", clientSecret: "shared-client-secret" };
+    // Same connectionId/credentialVersion/host — only companyId differs.
+    const keyA = { companyId, connectionId, credentialVersion: "1", host, catalog: "main", schema: "paperclip" };
+    const keyB = { companyId: otherCompanyId, connectionId, credentialVersion: "1", host, catalog: "main", schema: "paperclip" };
+
+    let issued = 0;
+    const fetchSpy = vi.fn(async (input: Parameters<typeof fetch>[0]) => {
+      const url = new URL(String(input));
+      expect(url.pathname.endsWith("/oidc/v1/token")).toBe(true);
+      issued += 1;
+      return new Response(JSON.stringify({ access_token: `token-${issued}`, expires_in: 3600 }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const tokenA = await resolveDatabricksAccessToken(keyA, credential);
+      // Company B must not be served company A's cached token — a fresh exchange runs.
+      const tokenB = await resolveDatabricksAccessToken(keyB, credential);
+      expect(tokenA.token).not.toBe(tokenB.token);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+      // Company A keeps getting its own token from cache, never company B's.
+      const tokenAAgain = await resolveDatabricksAccessToken(keyA, credential);
+      expect(tokenAAgain.token).toBe(tokenA.token);
+      expect(fetchSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      invalidateDatabricksAccessToken(connectionId);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keys the combo-list cache by companyId so company B never reuses company A's cached combos", async () => {
+    const connectionId = randomUUID();
+    const host = "https://acme.cloud.databricks.com";
+    const credential = { host, clientId: "shared-client-id", clientSecret: "shared-client-secret", catalog: "main", schema: "paperclip" };
+    const keyA = { companyId, connectionId, credentialVersion: "1", host, catalog: "main", schema: "paperclip" };
+    const keyB = { companyId: otherCompanyId, connectionId, credentialVersion: "1", host, catalog: "main", schema: "paperclip" };
+
+    // Count only Unity Catalog page requests; the token exchange is answered separately.
+    let pageCalls = 0;
+    const fetchSpy = vi.fn(databricksFetchImpl(() => {
+      pageCalls += 1;
+      return new Response(JSON.stringify({ model_services: [{ name: `model-services/main.paperclip.combo_${pageCalls}` }] }), { status: 200 });
+    }));
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const listA = await listDatabricksModelServices(keyA, credential);
+      expect(pageCalls).toBe(1);
+      // A repeat for company A within the TTL is served from cache.
+      await listDatabricksModelServices(keyA, credential);
+      expect(pageCalls).toBe(1);
+      // Company B never reuses company A's cached combo list — a fresh page runs.
+      const listB = await listDatabricksModelServices(keyB, credential);
+      expect(pageCalls).toBe(2);
+      expect(listA).not.toEqual(listB);
+    } finally {
+      invalidateDatabricksModelServiceCache(connectionId);
+      invalidateDatabricksAccessToken(connectionId);
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+
+// Property 7: a rotation/revocation blocks future issuance (the credentialVersion
+// bumps to a never-before-used value and both caches are invalidated) but never
+// reaches out to Databricks to revoke an already-issued token — such a token is
+// left to expire naturally.
+describe("Databricks credential rotation and revocation (Property 7)", () => {
+  it("bumps credentialVersion to a never-before-used value on every rapid successive rotation", async () => {
+    const userId = "dbx-rotation-version-user";
+    await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+    const account = await service.save(companyId, userId, databricksCreateInput("Rotation versions"), "unused-for-databricks");
+
+    const versions: string[] = [];
+    const initial = await service.resolveDatabricksCredential(companyId, account.connectionId, userId);
+    if (!initial.ok) throw new Error("expected ok resolution");
+    versions.push(initial.credential.credentialVersion);
+
+    // Rapid successive rotations: each reconnect rotates the stored secret,
+    // bumping its version. No delay between them.
+    for (let i = 0; i < 4; i++) {
+      await service.save(
+        companyId,
+        userId,
+        { ...databricksCreateInput("Rotation versions"), connectionId: account.connectionId, clientSecret: `rotated-secret-${i}` },
+        "unused-for-databricks",
+      );
+      const resolved = await service.resolveDatabricksCredential(companyId, account.connectionId, userId);
+      if (!resolved.ok) throw new Error("expected ok resolution");
+      versions.push(resolved.credential.credentialVersion);
+    }
+
+    // Never repeats, and is strictly increasing across the whole sequence.
+    expect(new Set(versions).size).toBe(versions.length);
+    const numeric = versions.map(Number);
+    for (let i = 1; i < numeric.length; i++) expect(numeric[i]).toBeGreaterThan(numeric[i - 1]);
+  });
+
+  it("rejects a rotated-away client secret with the same invalid-credential error as a 401 and never serves a stale-version cached token", async () => {
+    const connectionId = randomUUID();
+    const host = "https://acme.cloud.databricks.com";
+    const oldCredential = { host, clientId: "sp-client-id", clientSecret: "old-secret" };
+    const newCredential = { host, clientId: "sp-client-id", clientSecret: "new-secret" };
+
+    // Databricks accepts the current secret and rejects (401) a secret that has
+    // been rotated away at the workspace.
+    const fetchSpy = vi.fn(async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+      const url = new URL(String(input));
+      expect(url.pathname.endsWith("/oidc/v1/token")).toBe(true);
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      const decoded = Buffer.from(String(headers.Authorization ?? "").replace("Basic ", ""), "base64").toString("utf8");
+      if (decoded.endsWith(":old-secret")) return new Response(null, { status: 401 });
+      return new Response(JSON.stringify({ access_token: "fresh-token", expires_in: 3600 }), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      // A pre-rotation token is cached under credentialVersion "1".
+      const preRotation = await resolveDatabricksAccessToken(
+        { companyId, connectionId, credentialVersion: "1", host, catalog: "main", schema: "paperclip" },
+        newCredential,
+      );
+      expect(preRotation.token).toBe("fresh-token");
+
+      // Rotation: Paperclip invalidates the token cache and bumps the version.
+      invalidateDatabricksAccessToken(connectionId);
+
+      // A post-rotation exchange that still uses the OLD secret is rejected with
+      // the SAME invalid-credential classification a raw 401 produces, and never
+      // returns the pre-rotation token cached under the previous version.
+      const rotatedAwayError = await resolveDatabricksAccessToken(
+        { companyId, connectionId, credentialVersion: "2", host, catalog: "main", schema: "paperclip" },
+        oldCredential,
+      ).catch((error: unknown) => error);
+      expect(rotatedAwayError).toBeInstanceOf(DatabricksDiscoveryError);
+      expect((rotatedAwayError as DatabricksDiscoveryError).kind).toBe("invalid_credential");
+
+      // The direct token exchange classifies the same 401 identically.
+      const directError = await fetchDatabricksAccessToken(oldCredential).catch((error: unknown) => error);
+      expect(directError).toBeInstanceOf(DatabricksDiscoveryError);
+      expect((directError as DatabricksDiscoveryError).kind).toBe("invalid_credential");
+    } finally {
+      invalidateDatabricksAccessToken(connectionId);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("never issues a remote revocation call to Databricks when rotating or revoking a connection", async () => {
+    const userId = "dbx-no-remote-revoke-user";
+    await db.insert(companyMemberships).values({ companyId, principalId: userId, principalType: "user", status: "active", membershipRole: "member" });
+    const account = await service.save(companyId, userId, databricksCreateInput("No remote revoke"), "unused-for-databricks");
+
+    // Any network call during rotate/revoke would be a remote revocation attempt.
+    const fetchSpy = vi.fn(async () => {
+      throw new Error("no network call is expected during rotate/revoke");
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      // Rotation (reconnect with a new secret) invalidates local caches only.
+      await service.save(
+        companyId,
+        userId,
+        { ...databricksCreateInput("No remote revoke"), connectionId: account.connectionId, clientSecret: "rotated-secret" },
+        "unused-for-databricks",
+      );
+      expect(fetchSpy).not.toHaveBeenCalled();
+
+      // Revocation is a deliberate admin action; it also stays local.
+      await toolAccessService(db).revokeConnectionGrant(account.connectionId, account.grantId, { actorType: "user", actorId: userId });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    // After revocation, future issuance is blocked at resolution. A token issued
+    // before the rotation is left to expire naturally, never revoked remotely.
+    expect(await service.resolveDatabricksCredential(companyId, account.connectionId, userId)).toEqual({
+      ok: false,
+      reason: "connection_unavailable",
+      message: expect.any(String),
     });
   });
 });

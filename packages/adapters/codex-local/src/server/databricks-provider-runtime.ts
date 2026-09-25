@@ -5,13 +5,20 @@
 // "databricks". Kept as a standalone, pure function (no fs/process access)
 // so it can be unit tested without spawning a real Codex process.
 //
-// Requirement 5.3: reference the token only via `env_key = "DATABRICKS_TOKEN"`
-// indirection -- never inline the literal token value here.
+// Requirements 4.1/4.2: the payload authenticates via an `auth.command` helper
+// that mints a short-lived OAuth M2M access token at runtime. The hint carries
+// only the helper's absolute command, its args, and its timeouts -- never an
+// `env_key`, a literal token, or any other secret value.
 
 export interface DatabricksProviderRuntimeHint {
   provider: "databricks";
   baseUrl: string;
-  wireApi: string;
+  wireApi: "responses";
+  /** Absolute path of the installed helper binary; never resolved via PATH. */
+  authCommand: string;
+  authArgs: string[];
+  authTimeoutMs: number;
+  authRefreshIntervalMs: number;
 }
 
 function isDatabricksProviderRuntimeHint(
@@ -22,7 +29,15 @@ function isDatabricksProviderRuntimeHint(
     value !== null &&
     (value as { provider?: unknown }).provider === "databricks" &&
     typeof (value as { baseUrl?: unknown }).baseUrl === "string" &&
-    typeof (value as { wireApi?: unknown }).wireApi === "string"
+    typeof (value as { wireApi?: unknown }).wireApi === "string" &&
+    typeof (value as { authCommand?: unknown }).authCommand === "string" &&
+    Array.isArray((value as { authArgs?: unknown }).authArgs) &&
+    (value as { authArgs: unknown[] }).authArgs.every(
+      (arg) => typeof arg === "string",
+    ) &&
+    typeof (value as { authTimeoutMs?: unknown }).authTimeoutMs === "number" &&
+    typeof (value as { authRefreshIntervalMs?: unknown })
+      .authRefreshIntervalMs === "number"
   );
 }
 
@@ -45,8 +60,14 @@ export function buildDatabricksProvidersPayload(
       databricks: {
         name: "Databricks Unity Gateway",
         base_url: hint.baseUrl,
-        env_key: "DATABRICKS_TOKEN",
         wire_api: hint.wireApi,
+        supports_websockets: false,
+        auth: {
+          command: hint.authCommand,
+          args: hint.authArgs,
+          timeout_ms: hint.authTimeoutMs,
+          refresh_interval_ms: hint.authRefreshIntervalMs,
+        },
       },
     },
     model_provider: "databricks",

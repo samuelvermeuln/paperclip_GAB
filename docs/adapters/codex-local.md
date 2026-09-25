@@ -144,21 +144,32 @@ model instead of picking a single OpenAI model directly.
 
 ### Connecting a workspace
 
-Create an AI Connection with `provider: "databricks"` and `method: "api_key"` (a Databricks
-personal access token). `method: "subscription"` is not supported for this provider. Alongside
-the token, the connection stores:
+Create an AI Connection with `provider: "databricks"` and `method: "oauth_m2m"` — OAuth 2.0
+Machine-to-Machine (client credentials) against a Databricks service principal. This is the only
+auth method supported for the provider; a request with any other `method` (including the former
+`api_key` / personal access token flow, or `subscription`) is rejected with a validation error.
+The connection stores:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
+| `clientId` | string | Yes | Service principal OAuth client ID used in the client-credentials exchange. |
+| `clientSecret` | string | Yes | Service principal OAuth client secret. Stored encrypted; never returned by any API response. |
 | `workspaceHost` | string | Yes | Workspace origin only, e.g. `https://acme.cloud.databricks.com`. No path, query string, fragment, or userinfo. |
 | `catalog` | string | Yes | Unity Catalog name the combo lives under. |
 | `schema` | string | Yes | Schema within `catalog` the combo lives under. |
 | `modelPrefix` | string | No | If set, only combos whose short name starts with this prefix are discovered. |
 
-A `workspaceHost` that isn't a bare `https://` origin is rejected with a `422` and the connection
-is not persisted. Creating, editing, or revoking a Databricks connection writes an activity log
-entry like any other AI Connection mutation, and the PAT is never returned in any API response,
-including the connection's own read/list endpoints.
+There is no static `DATABRICKS_TOKEN` in this model. The `clientSecret` is persisted only in the
+encrypted secrets store; at runtime it is exchanged for a short-lived OAuth access token (see
+[Execution routing](#execution-routing)). A `workspaceHost` that isn't a bare `https://` origin is
+rejected with a `422` and the connection is not persisted. Creating, editing, or revoking a
+Databricks connection writes an activity log entry like any other AI Connection mutation, and the
+`clientSecret` is never returned in any API response, including the connection's own read/list
+endpoints.
+
+Rotating the `clientSecret` or revoking the connection bumps the connection's credential version,
+which invalidates any cached access token and combo list for the prior version and blocks new runs
+until the connection resolves valid credentials again.
 
 ### Combo discovery
 
@@ -181,19 +192,48 @@ time — Codex is called with that exact string as the model.
 ### Execution routing
 
 When a run's active provider is Databricks, Paperclip generates a per-run Codex model-provider
-entry pointing `base_url` at `<workspaceHost>/ai-gateway/codex/v1` with `wire_api = "responses"`,
-so the same Codex CLI process that normally talks to OpenAI instead talks to the workspace's Unity
-Gateway. The provider entry references the token only through `env_key = "DATABRICKS_TOKEN"`
-indirection: the literal PAT is never written into `config.toml`, never included in run events,
-activity log entries, or API responses, and only exists in the spawned process's environment for
-that run's duration. As with any other managed run, `config.toml` is restored to its pre-run state
-on the next run preparation, whether the run succeeded, failed, or crashed before cleanup.
+entry pointing `base_url` at `<workspaceHost>/ai-gateway/codex/v1` with `wire_api = "responses"`
+and `supports_websockets = false`, so the same Codex CLI process that normally talks to OpenAI
+instead talks to the workspace's Unity Gateway.
+
+Authentication uses an external helper command rather than an environment variable. The generated
+provider entry carries an `[model_providers.databricks.auth]` block instead of an `env_key`:
+
+```toml
+[model_providers.databricks.auth]
+command = "/abs/path/to/paperclip-databricks-oauth-token"
+args = []
+timeout_ms = 5000
+refresh_interval_ms = 1800000
+```
+
+`command` is the absolute path to the `paperclip-databricks-oauth-token` helper (a published `bin`
+of the `codex-local` adapter package, resolved by absolute path — never from `PATH`). Codex spawns
+it to mint a fresh OAuth M2M access token, first at startup and then every `refresh_interval_ms`
+(30 minutes, comfortably shorter than the ~1 hour access-token lifetime) so long runs never fail on
+token expiry. The helper reads the credential from a file whose path is passed in
+`DATABRICKS_CREDENTIAL_FILE`, exchanges the client credentials at `<workspaceHost>/oidc/v1/token`,
+and writes only the access token to stdout.
+
+To deliver the credential without exposing it, the runtime writes a mode `0600`
+`databricks-credential.json` (`{ host, clientId, clientSecret }`) into the run's ephemeral provider
+home and exposes only that file's path via `DATABRICKS_CREDENTIAL_FILE`. No `DATABRICKS_TOKEN` (or
+any long-lived static token) is ever placed in the Codex process environment. The literal
+`clientSecret` and every minted access token are kept out of `config.toml`, run events, activity
+log entries, prompt content, and API responses. If the credential file cannot be created or its
+permissions cannot be restricted, runtime preparation aborts without starting the Codex process.
+The ephemeral home — and thus the credential file — is per run, unreadable by other runs, and
+removed on cleanup whether the run succeeded, failed, or crashed. As with any other managed run,
+`config.toml` is restored to its pre-run state on the next run preparation.
 
 ### Auth readiness
 
-A run whose active provider is Databricks is considered credential-ready as soon as
-`DATABRICKS_TOKEN` is non-empty — `OPENAI_API_KEY` is not required. Runs on a non-Databricks
-provider keep the existing `OPENAI_API_KEY`/`auth.json` readiness behavior unchanged.
+A run whose active provider is Databricks is considered credential-ready when the OAuth helper
+(`auth.command`) is configured and `DATABRICKS_CREDENTIAL_FILE` points at an existing, readable
+credential file — `OPENAI_API_KEY` is not required. The readiness check confirms only the file's
+presence and readability; it never opens the file or inspects the `clientSecret`. Runs on a
+non-Databricks provider keep the existing `OPENAI_API_KEY`/`auth.json` readiness behavior
+unchanged.
 
 ### Unavailable combos
 
@@ -211,8 +251,8 @@ as an invalid-credential, insufficient-permission, rate-limited, or unavailable 
 same classification the combo-discovery API uses.
 
 Callers of the combo-discovery API (`GET /companies/:companyId/adapters/codex_local/models?provider=databricks&connectionId=...`)
-should expect standard HTTP statuses rather than Databricks-specific ones: `401` for an
-invalid/expired PAT, `403` for insufficient permission on the catalog/schema or for a connection
+should expect standard HTTP statuses rather than Databricks-specific ones: `401` for invalid or
+rotated client credentials, `403` for insufficient permission on the catalog/schema or for a connection
 the actor has no usable grant on, `429` for rate limiting (with `Retry-After` echoed when
 Databricks provides it), `502` for a Databricks 5xx/timeout/network failure, `422` for a
 malformed/disallowed workspace host or a missing `connectionId`, and `404`/`409` for a connection
@@ -221,8 +261,8 @@ that doesn't belong to the company or has been revoked.
 ### Out of scope
 
 This integration only discovers and selects combos that already exist in Databricks. It does not
-support: creating or editing combos from Paperclip; any Databricks auth method other than PAT
-(`api_key`); visualizing a combo's internal routing or traffic-split destinations; or webhook-based
+support: creating or editing combos from Paperclip; any Databricks auth method other than OAuth
+M2M (`oauth_m2m`); visualizing a combo's internal routing or traffic-split destinations; or webhook-based
 real-time sync of the combo list (discovery is pull-based only, on selector open and on
 manual/TTL-based refresh).
 

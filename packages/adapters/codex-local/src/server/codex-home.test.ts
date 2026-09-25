@@ -895,6 +895,27 @@ describe("evaluateCodexCredentialReadiness", () => {
     await fs.writeFile(path.join(home, "auth.json"), '{"OPENAI_API_KEY":"sk-live"}\n', "utf8");
   }
 
+  // Writes an ephemeral Databricks OAuth credential file (mode 0600) exactly as
+  // the runtime does, and returns its path. The readiness check only probes the
+  // file's presence/readability -- it never reads the clientSecret it holds
+  // (Property 8) -- so a plausible `{ host, clientId, clientSecret }` payload is
+  // enough to drive a ready Databricks run.
+  async function writeCredentialFile(root: string): Promise<string> {
+    const credentialFile = path.join(root, "databricks-credential.json");
+    await fs.writeFile(
+      credentialFile,
+      JSON.stringify({
+        host: "https://dbc-123.cloud.databricks.com",
+        clientId: "client-abc",
+        clientSecret: "secret-xyz",
+      }),
+      { mode: 0o600 },
+    );
+    return credentialFile;
+  }
+
+  const DATABRICKS_AUTH_COMMAND = "/opt/paperclip/bin/paperclip-databricks-oauth-token";
+
   it("flags a managed home with no source auth and empty OPENAI_API_KEY as not ready", async () => {
     const fx = await makeFixture();
     try {
@@ -991,16 +1012,18 @@ describe("evaluateCodexCredentialReadiness", () => {
     }
   });
 
-  it("is ready for a Databricks-active run with only a non-empty DATABRICKS_TOKEN set", async () => {
+  it("is ready for a Databricks-active run when the OAuth helper is configured and the credential file is readable", async () => {
     const fx = await makeFixture();
     try {
+      const credentialFile = await writeCredentialFile(fx.root);
       const result = await evaluateCodexCredentialReadiness({
         env: fx.env,
         companyId: "company-1",
         configuredCodexHome: fx.managedAgentHome,
         configuredApiKey: null,
         activeProvider: "databricks",
-        configuredDatabricksToken: "dapi-123",
+        databricksAuthCommand: DATABRICKS_AUTH_COMMAND,
+        databricksCredentialFile: credentialFile,
       });
       expect(result).toMatchObject({
         managed: true,
@@ -1014,16 +1037,40 @@ describe("evaluateCodexCredentialReadiness", () => {
     }
   });
 
-  it("is not ready for a Databricks-active run with an empty DATABRICKS_TOKEN, even when an OPENAI_API_KEY is also configured", async () => {
+  it("is not ready for a Databricks-active run when the credential file is absent, even when an OPENAI_API_KEY is also configured", async () => {
     const fx = await makeFixture();
     try {
+      const missingCredentialFile = path.join(fx.root, "no-such-databricks-credential.json");
       const result = await evaluateCodexCredentialReadiness({
         env: fx.env,
         companyId: "company-1",
         configuredCodexHome: fx.managedAgentHome,
         configuredApiKey: "sk-agent-key",
         activeProvider: "databricks",
-        configuredDatabricksToken: "",
+        databricksAuthCommand: DATABRICKS_AUTH_COMMAND,
+        databricksCredentialFile: missingCredentialFile,
+      });
+      // A configured OPENAI_API_KEY must never rescue a Databricks-active run:
+      // readiness stays false so the run never silently falls back to OpenAI
+      // (Property 1).
+      expect(result).toMatchObject({ authMode: "databricks", ready: false });
+    } finally {
+      await fs.rm(fx.root, { recursive: true, force: true });
+    }
+  });
+
+  it("is not ready for a Databricks-active run when the OAuth helper command is not configured, even with a readable credential file", async () => {
+    const fx = await makeFixture();
+    try {
+      const credentialFile = await writeCredentialFile(fx.root);
+      const result = await evaluateCodexCredentialReadiness({
+        env: fx.env,
+        companyId: "company-1",
+        configuredCodexHome: fx.managedAgentHome,
+        configuredApiKey: null,
+        activeProvider: "databricks",
+        databricksAuthCommand: null,
+        databricksCredentialFile: credentialFile,
       });
       expect(result).toMatchObject({ authMode: "databricks", ready: false });
     } finally {
@@ -1031,9 +1078,14 @@ describe("evaluateCodexCredentialReadiness", () => {
     }
   });
 
-  it("evaluates the Databricks branch as a pure env check, without touching disk", async () => {
+  it("evaluates the Databricks branch independent of the CODEX_HOME auth state (a missing home is still ready)", async () => {
     const fx = await makeFixture();
     try {
+      // The Databricks run authenticates through the Unity Gateway helper, so
+      // the CODEX_HOME's auth.json is irrelevant: a home that does not exist on
+      // disk is still ready as long as the OAuth helper and its credential file
+      // are configured.
+      const credentialFile = await writeCredentialFile(fx.root);
       const missingHome = path.join(fx.root, "does-not-exist", "codex-home");
       const result = await evaluateCodexCredentialReadiness({
         env: fx.env,
@@ -1041,7 +1093,8 @@ describe("evaluateCodexCredentialReadiness", () => {
         configuredCodexHome: missingHome,
         configuredApiKey: null,
         activeProvider: "databricks",
-        configuredDatabricksToken: "dapi-123",
+        databricksAuthCommand: DATABRICKS_AUTH_COMMAND,
+        databricksCredentialFile: credentialFile,
       });
       expect(result).toMatchObject({ authMode: "databricks", ready: true });
       expect(result.effectiveHome).toBe(path.resolve(missingHome));
@@ -1053,6 +1106,7 @@ describe("evaluateCodexCredentialReadiness", () => {
   it("treats a Databricks-active run against an external/user-supplied CODEX_HOME as unmanaged, mirroring the non-Databricks computation", async () => {
     const fx = await makeFixture();
     try {
+      const credentialFile = await writeCredentialFile(fx.root);
       const externalHome = path.join(fx.root, "user-codex-home");
       const result = await evaluateCodexCredentialReadiness({
         env: fx.env,
@@ -1060,7 +1114,8 @@ describe("evaluateCodexCredentialReadiness", () => {
         configuredCodexHome: externalHome,
         configuredApiKey: null,
         activeProvider: "databricks",
-        configuredDatabricksToken: "dapi-123",
+        databricksAuthCommand: DATABRICKS_AUTH_COMMAND,
+        databricksCredentialFile: credentialFile,
       });
       expect(result).toMatchObject({
         managed: false,

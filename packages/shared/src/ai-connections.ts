@@ -34,7 +34,7 @@ export const AI_PROVIDERS = [
   "databricks",
 ] as const;
 export const aiProviderSchema = z.enum(AI_PROVIDERS);
-export const aiAuthMethodSchema = z.enum(["subscription", "api_key"]);
+export const aiAuthMethodSchema = z.enum(["subscription", "api_key", "oauth_m2m"]);
 export type AiProvider = z.infer<typeof aiProviderSchema>;
 export type AiAuthMethod = z.infer<typeof aiAuthMethodSchema>;
 const requirement = { provider: aiProviderSchema, method: aiAuthMethodSchema };
@@ -74,7 +74,7 @@ export const AI_CONNECTION_CAPABILITIES: Record<
   {
     name: string;
     methods: Partial<
-      Record<AiAuthMethod, { adapters: readonly string[]; envKey: string }>
+      Record<AiAuthMethod, { adapters: readonly string[]; envKey?: string }>
     >;
   }
 > = {
@@ -111,7 +111,9 @@ export const AI_CONNECTION_CAPABILITIES: Record<
   databricks: {
     name: "Databricks Unity Gateway",
     methods: {
-      api_key: { adapters: ["codex_local"], envKey: "DATABRICKS_TOKEN" },
+      // No envKey: the credential is a (clientId, clientSecret) pair delivered
+      // over a protected channel to the helper, never a single env var.
+      oauth_m2m: { adapters: ["codex_local"] },
     },
   },
 };
@@ -152,6 +154,19 @@ export const databricksConnectionConfigSchema = z.object({
 }).strict();
 export type DatabricksConnectionConfig = z.infer<
   typeof databricksConnectionConfigSchema
+>;
+
+/**
+ * OAuth 2.0 Machine-to-Machine (client credentials) pair for a Databricks
+ * service principal. Persisted only in the encrypted secret store and never
+ * serialized back to the client.
+ */
+export const databricksOAuthCredentialSchema = z.object({
+  clientId: z.string().trim().min(1).max(255),
+  clientSecret: z.string().trim().min(1).max(4096),
+}).strict();
+export type DatabricksOAuthCredential = z.infer<
+  typeof databricksOAuthCredentialSchema
 >;
 
 export function isAiConnectionCompatible(
@@ -234,11 +249,38 @@ export const createAiConnectionSchema = z
     catalog: z.string().trim().min(1).max(128).optional(),
     schema: z.string().trim().min(1).max(128).optional(),
     modelPrefix: z.string().trim().min(1).max(128).optional(),
+    // OAuth M2M credential pair — only used when provider === "databricks"
+    // && method === "oauth_m2m". Optional at the object level so every other
+    // provider's payload shape stays unchanged.
+    clientId: z.string().trim().min(1).max(255).optional(),
+    clientSecret: z.string().trim().min(1).max(4096).optional(),
   })
   .strict()
   .superRefine((v, ctx) => {
     if (!AI_CONNECTION_CAPABILITIES[v.provider].methods[v.method])
       ctx.addIssue({ code: "custom", message: "Unsupported sign-in method" });
+    if (v.provider === "databricks") {
+      // Databricks migrated from a static PAT (api_key) to OAuth M2M: it uses a
+      // clientId/clientSecret pair, never apiKey/loginSessionId, so the generic
+      // credential check below does not apply.
+      if (v.method !== "oauth_m2m")
+        ctx.addIssue({
+          code: "custom",
+          message: "Databricks connections only support the oauth_m2m sign-in method",
+          path: ["method"],
+        });
+      if (!v.clientId)
+        ctx.addIssue({ code: "custom", message: "Client ID is required", path: ["clientId"] });
+      if (!v.clientSecret)
+        ctx.addIssue({ code: "custom", message: "Client secret is required", path: ["clientSecret"] });
+      if (!v.workspaceHost)
+        ctx.addIssue({ code: "custom", message: "Workspace host is required", path: ["workspaceHost"] });
+      if (!v.catalog)
+        ctx.addIssue({ code: "custom", message: "Catalog is required", path: ["catalog"] });
+      if (!v.schema)
+        ctx.addIssue({ code: "custom", message: "Schema is required", path: ["schema"] });
+      return;
+    }
     if (
       v.method === "api_key"
         ? !v.apiKey || Boolean(v.loginSessionId)
@@ -249,20 +291,6 @@ export const createAiConnectionSchema = z
         message:
           "Provide exactly the credential for the selected sign-in method",
       });
-    }
-    if (v.provider === "databricks") {
-      if (v.method !== "api_key")
-        ctx.addIssue({
-          code: "custom",
-          message: "Databricks connections only support the api_key sign-in method",
-          path: ["method"],
-        });
-      if (!v.workspaceHost)
-        ctx.addIssue({ code: "custom", message: "Workspace host is required", path: ["workspaceHost"] });
-      if (!v.catalog)
-        ctx.addIssue({ code: "custom", message: "Catalog is required", path: ["catalog"] });
-      if (!v.schema)
-        ctx.addIssue({ code: "custom", message: "Schema is required", path: ["schema"] });
     }
   });
 export type CreateAiConnection = z.infer<typeof createAiConnectionSchema>;

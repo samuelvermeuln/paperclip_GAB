@@ -31,6 +31,18 @@ All environment variables that Paperclip uses for server configuration.
 | `PAPERCLIP_DATABRICKS_HOST_ALLOWLIST` | (unset) | Comma-separated list of `https://` workspace host origins allowed for new Databricks AI Connections on an authenticated/public (SaaS) deployment. Ignored on `local_trusted` or private deployments. |
 | `PAPERCLIP_DATABRICKS_ALLOW_PRIVATE_HOSTS` | `false` | Set to `true`/`1` to let an administrator explicitly allow any Databricks workspace host — including private/self-hosted ones — on an authenticated/public (SaaS) deployment, bypassing `PAPERCLIP_DATABRICKS_HOST_ALLOWLIST`. |
 
+The two `PAPERCLIP_DATABRICKS_*` variables above are the only environment
+variables involved in the Databricks Unity Gateway (Combos) integration. It
+authenticates with OAuth 2.0 Machine-to-Machine (client credentials): a
+connection stores an encrypted `clientId`/`clientSecret`, and at run time
+Paperclip writes a short-lived, per-run credential file that the OAuth helper
+reads. No new environment variable is required for the helper — the credential
+is delivered by that ephemeral file, not through the process environment — and
+there is no long-lived `DATABRICKS_TOKEN` (or equivalent static personal access
+token) to set anywhere. Do not configure one; it is neither read nor needed. See
+[Databricks Unity Gateway (Combos)](../adapters/codex-local.md#databricks-unity-gateway-combos)
+for the runtime details.
+
 Daytona connectivity for `paperclip_runner` uses authenticated provider
 WebSocket ingress and follows the instance experimental setting
 `enableNativeRunner` (default `false`). There is no separate ingress opt-in.

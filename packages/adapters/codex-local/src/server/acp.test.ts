@@ -238,6 +238,41 @@ async function makeTempRoot(prefix: string) {
   return root;
 }
 
+const DATABRICKS_ACP_BASE_URL = "https://acme.cloud.databricks.com/ai-gateway/codex/v1";
+// Absolute path of the installed OAuth M2M helper binary. ACP readiness only
+// requires this to be a configured (non-empty) command; the helper is never
+// spawned during the readiness check and the value is never read as a secret.
+const DATABRICKS_ACP_AUTH_COMMAND = "/opt/paperclip/bin/paperclip-databricks-oauth-token";
+
+/** A well-formed Databricks `providerRuntimeHint`, including the OAuth M2M
+ * helper fields the runtime now attaches (authCommand/args/timeouts). Readiness
+ * keys off `authCommand` + `DATABRICKS_CREDENTIAL_FILE`, never a static token. */
+function databricksAcpProviderRuntimeHint() {
+  return {
+    provider: "databricks" as const,
+    baseUrl: DATABRICKS_ACP_BASE_URL,
+    wireApi: "responses",
+    authCommand: DATABRICKS_ACP_AUTH_COMMAND,
+    authArgs: [] as string[],
+    authTimeoutMs: 5_000,
+    authRefreshIntervalMs: 1_800_000,
+  };
+}
+
+/** Writes the ephemeral `{ host, clientId, clientSecret }` credential file
+ * (mode 0600) the runtime hands the OAuth helper, and returns its path. ACP
+ * readiness only probes the file's presence/readability -- it never opens it
+ * (Property 8) -- so a plausible payload is enough to drive a ready run. */
+async function writeDatabricksAcpCredentialFile(root: string): Promise<string> {
+  const credentialFile = path.join(root, "databricks-credential.json");
+  await fs.writeFile(
+    credentialFile,
+    JSON.stringify({ host: DATABRICKS_ACP_BASE_URL, clientId: "client-abc", clientSecret: "secret-xyz" }),
+    { mode: 0o600 },
+  );
+  return credentialFile;
+}
+
 async function createRuntimeSkill(root: string) {
   const source = path.join(root, "skills", "review");
   await fs.mkdir(source, { recursive: true });
@@ -725,11 +760,12 @@ describe("codex_local ACP lane", () => {
     );
   });
 
-  it("reports Databricks readiness for the ACP non-remote lane when DATABRICKS_TOKEN is set (Requirement 6)", async () => {
+  it("reports Databricks readiness for the ACP non-remote lane when the OAuth helper and credential file are configured (Requirement 6)", async () => {
     const root = await makeTempRoot("paperclip-codex-acp-databricks-ready-");
     const commandPath = path.join(root, "bin", "codex-acp");
     await fs.mkdir(path.dirname(commandPath), { recursive: true });
     await fs.writeFile(commandPath, "#!/usr/bin/env sh\n", "utf8");
+    const credentialFile = await writeDatabricksAcpCredentialFile(root);
     setNodeVersion("v24.11.0");
     delete process.env.OPENAI_API_KEY;
 
@@ -740,12 +776,8 @@ describe("codex_local ACP lane", () => {
         engine: "acp",
         cwd: root,
         agentCommand: commandPath,
-        providerRuntimeHint: {
-          provider: "databricks",
-          baseUrl: "https://acme.cloud.databricks.com/ai-gateway/codex/v1",
-          wireApi: "responses",
-        },
-        env: { DATABRICKS_TOKEN: "dapi-fixture-token" },
+        providerRuntimeHint: databricksAcpProviderRuntimeHint(),
+        env: { DATABRICKS_CREDENTIAL_FILE: credentialFile },
       },
     });
 
@@ -761,7 +793,7 @@ describe("codex_local ACP lane", () => {
     );
   });
 
-  it("still reports missing credentials for a Databricks-configured ACP agent with no token (Requirement 6)", async () => {
+  it("still reports missing credentials for a Databricks-configured ACP agent when the credential file is absent (Requirement 6)", async () => {
     const root = await makeTempRoot("paperclip-codex-acp-databricks-missing-");
     const commandPath = path.join(root, "bin", "codex-acp");
     await fs.mkdir(path.dirname(commandPath), { recursive: true });
@@ -777,12 +809,11 @@ describe("codex_local ACP lane", () => {
         engine: "acp",
         cwd: root,
         agentCommand: commandPath,
-        providerRuntimeHint: {
-          provider: "databricks",
-          baseUrl: "https://acme.cloud.databricks.com/ai-gateway/codex/v1",
-          wireApi: "responses",
-        },
-        env: { DATABRICKS_TOKEN: "" },
+        // Helper command is configured, but no ephemeral credential file is
+        // present in the run env, so readiness stays false rather than falling
+        // back to OpenAI (Property 1).
+        providerRuntimeHint: databricksAcpProviderRuntimeHint(),
+        env: {},
       },
     });
 
@@ -795,8 +826,9 @@ describe("codex_local ACP lane", () => {
     );
   });
 
-  it("reports Databricks readiness for the ACP sandbox lane when DATABRICKS_TOKEN is set (Requirement 6)", async () => {
+  it("reports Databricks readiness for the ACP sandbox lane when the OAuth helper and credential file are configured (Requirement 6)", async () => {
     const root = await makeTempRoot("paperclip-codex-acp-databricks-sandbox-ready-");
+    const credentialFile = await writeDatabricksAcpCredentialFile(root);
     setNodeVersion("v24.11.0");
     delete process.env.OPENAI_API_KEY;
 
@@ -807,12 +839,8 @@ describe("codex_local ACP lane", () => {
         engine: "acp",
         cwd: root,
         agentCommand: "node ./fake-acp.js",
-        providerRuntimeHint: {
-          provider: "databricks",
-          baseUrl: "https://acme.cloud.databricks.com/ai-gateway/codex/v1",
-          wireApi: "responses",
-        },
-        env: { DATABRICKS_TOKEN: "dapi-fixture-token" },
+        providerRuntimeHint: databricksAcpProviderRuntimeHint(),
+        env: { DATABRICKS_CREDENTIAL_FILE: credentialFile },
       },
       executionTarget: {
         kind: "remote",
@@ -844,7 +872,7 @@ describe("codex_local ACP lane", () => {
     );
   });
 
-  it("still reports the canonical missing-auth check for a Databricks-configured ACP sandbox agent with no token (Requirement 6)", async () => {
+  it("still reports the canonical missing-auth check for a Databricks-configured ACP sandbox agent when the credential file is absent (Requirement 6)", async () => {
     const root = await makeTempRoot("paperclip-codex-acp-databricks-sandbox-missing-");
     setNodeVersion("v24.11.0");
     delete process.env.OPENAI_API_KEY;
@@ -856,12 +884,10 @@ describe("codex_local ACP lane", () => {
         engine: "acp",
         cwd: root,
         agentCommand: "node ./fake-acp.js",
-        providerRuntimeHint: {
-          provider: "databricks",
-          baseUrl: "https://acme.cloud.databricks.com/ai-gateway/codex/v1",
-          wireApi: "responses",
-        },
-        env: { DATABRICKS_TOKEN: "" },
+        // Helper configured, but no ephemeral credential file present: readiness
+        // stays false and the run never silently falls back to OpenAI.
+        providerRuntimeHint: databricksAcpProviderRuntimeHint(),
+        env: {},
       },
       executionTarget: {
         kind: "remote",

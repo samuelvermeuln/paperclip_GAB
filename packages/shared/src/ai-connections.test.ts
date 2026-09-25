@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { databricksConnectionConfigSchema } from "./ai-connections.js";
+import {
+  createAiConnectionSchema,
+  databricksConnectionConfigSchema,
+  databricksOAuthCredentialSchema,
+} from "./ai-connections.js";
 
 function baseConfig(overrides: Record<string, unknown> = {}) {
   return {
@@ -193,5 +197,205 @@ describe("databricksConnectionConfigSchema", () => {
 
       expect(result.success).toBe(false);
     });
+  });
+});
+
+/** A fully valid Databricks OAuth M2M create-connection payload. */
+function baseDatabricksCreateInput(overrides: Record<string, unknown> = {}) {
+  return {
+    provider: "databricks",
+    method: "oauth_m2m",
+    name: "Acme Unity Gateway",
+    ownership: "personal",
+    clientId: "svc-principal-id",
+    clientSecret: "svc-principal-secret",
+    workspaceHost: "https://acme.cloud.databricks.com",
+    catalog: "main",
+    schema: "paperclip",
+    ...overrides,
+  };
+}
+
+/** The same payload with the named keys removed, to exercise the "field absent" path. */
+function databricksCreateInputWithout(...keys: string[]) {
+  const input: Record<string, unknown> = baseDatabricksCreateInput();
+  for (const key of keys) delete input[key];
+  return input;
+}
+
+function issuePaths(result: ReturnType<typeof createAiConnectionSchema.safeParse>): string[] {
+  return result.success ? [] : result.error.issues.map((issue) => issue.path.join("."));
+}
+
+describe("createAiConnectionSchema — databricks branch", () => {
+  const databricksRequiredFields = [
+    "clientId",
+    "clientSecret",
+    "workspaceHost",
+    "catalog",
+    "schema",
+  ] as const;
+
+  it("accepts a complete OAuth M2M payload", () => {
+    const result = createAiConnectionSchema.safeParse(baseDatabricksCreateInput());
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.provider).toBe("databricks");
+      expect(result.data.method).toBe("oauth_m2m");
+      expect(result.data.clientId).toBe("svc-principal-id");
+      expect(result.data.workspaceHost).toBe("https://acme.cloud.databricks.com");
+    }
+  });
+
+  describe("method must be oauth_m2m", () => {
+    it("rejects method: api_key with an issue on the method field", () => {
+      const result = createAiConnectionSchema.safeParse(
+        baseDatabricksCreateInput({ method: "api_key" }),
+      );
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const methodIssue = result.error.issues.find(
+          (issue) => issue.path.join(".") === "method",
+        );
+        expect(methodIssue).toBeDefined();
+        expect(methodIssue?.message).toContain("oauth_m2m");
+      }
+    });
+
+    it("rejects method: subscription with an issue on the method field", () => {
+      const result = createAiConnectionSchema.safeParse(
+        baseDatabricksCreateInput({ method: "subscription" }),
+      );
+
+      expect(result.success).toBe(false);
+      expect(issuePaths(result)).toContain("method");
+    });
+  });
+
+  describe("required credential/config fields", () => {
+    it("emits exactly one issue per field when all are absent", () => {
+      const input = databricksCreateInputWithout(...databricksRequiredFields);
+      const result = createAiConnectionSchema.safeParse(input);
+
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        const paths = issuePaths(result).sort();
+        expect(paths).toEqual(
+          [...databricksRequiredFields].sort(),
+        );
+      }
+    });
+
+    for (const field of databricksRequiredFields) {
+      it(`rejects when ${field} is absent, flagging that field`, () => {
+        const result = createAiConnectionSchema.safeParse(
+          databricksCreateInputWithout(field),
+        );
+
+        expect(result.success).toBe(false);
+        expect(issuePaths(result)).toContain(field);
+      });
+
+      it(`rejects when ${field} is an empty string, flagging that field`, () => {
+        const result = createAiConnectionSchema.safeParse(
+          baseDatabricksCreateInput({ [field]: "" }),
+        );
+
+        expect(result.success).toBe(false);
+        expect(issuePaths(result)).toContain(field);
+      });
+    }
+  });
+});
+
+describe("databricksOAuthCredentialSchema", () => {
+  it("accepts a valid clientId/clientSecret pair", () => {
+    const result = databricksOAuthCredentialSchema.safeParse({
+      clientId: "svc-principal-id",
+      clientSecret: "svc-principal-secret",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.clientId).toBe("svc-principal-id");
+      expect(result.data.clientSecret).toBe("svc-principal-secret");
+    }
+  });
+
+  it("trims surrounding whitespace on both fields", () => {
+    const result = databricksOAuthCredentialSchema.safeParse({
+      clientId: "  svc-principal-id  ",
+      clientSecret: "  svc-principal-secret  ",
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.clientId).toBe("svc-principal-id");
+      expect(result.data.clientSecret).toBe("svc-principal-secret");
+    }
+  });
+
+  it("rejects a missing clientId", () => {
+    const result = databricksOAuthCredentialSchema.safeParse({
+      clientSecret: "svc-principal-secret",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a missing clientSecret", () => {
+    const result = databricksOAuthCredentialSchema.safeParse({
+      clientId: "svc-principal-id",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an empty clientId", () => {
+    const result = databricksOAuthCredentialSchema.safeParse({
+      clientId: "",
+      clientSecret: "svc-principal-secret",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a whitespace-only clientSecret", () => {
+    const result = databricksOAuthCredentialSchema.safeParse({
+      clientId: "svc-principal-id",
+      clientSecret: "   ",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects an unexpected extra field (.strict())", () => {
+    const result = databricksOAuthCredentialSchema.safeParse({
+      clientId: "svc-principal-id",
+      clientSecret: "svc-principal-secret",
+      token: "should-not-be-here",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a clientId longer than 255 characters", () => {
+    const result = databricksOAuthCredentialSchema.safeParse({
+      clientId: "a".repeat(256),
+      clientSecret: "svc-principal-secret",
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects a clientSecret longer than 4096 characters", () => {
+    const result = databricksOAuthCredentialSchema.safeParse({
+      clientId: "svc-principal-id",
+      clientSecret: "a".repeat(4097),
+    });
+
+    expect(result.success).toBe(false);
   });
 });

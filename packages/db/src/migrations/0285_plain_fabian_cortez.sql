@@ -1,0 +1,2 @@
+ALTER TABLE "ai_connection_defaults" DROP CONSTRAINT "ai_connection_defaults_method_check";--> statement-breakpoint
+ALTER TABLE "ai_connection_defaults" ADD CONSTRAINT "ai_connection_defaults_method_check" CHECK ("ai_connection_defaults"."method" in ('subscription','api_key','oauth_m2m'));

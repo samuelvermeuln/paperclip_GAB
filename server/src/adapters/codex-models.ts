@@ -121,6 +121,7 @@ async function loadDatabricksCodexModels(
     {
       companyId: context.companyId,
       connectionId: context.connectionId,
+      credentialVersion: resolvedCredential.credentialVersion,
       host: resolvedCredential.host,
       catalog: resolvedCredential.catalog,
       schema: resolvedCredential.schema,

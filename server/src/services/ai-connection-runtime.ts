@@ -1,13 +1,16 @@
 import { createHash } from "node:crypto";
 import { HttpError, unprocessable } from "../errors.js";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { and, eq } from "drizzle-orm";
 import { type Db, companySecrets, connectionGrants } from "@paperclipai/db";
 import {
   AI_CONNECTION_CAPABILITIES,
   databricksConnectionConfigSchema,
+  databricksOAuthCredentialSchema,
   type AiConnectionBinding,
 } from "@paperclipai/shared";
 import { aiConnectionService } from "./ai-connections.js";
@@ -181,6 +184,18 @@ function managedAiHomeEnvironment(home: string): Record<string, string> {
 }
 
 /** Only the server-created credential home is volatile; retain all other config. */
+/** Name of the 0600 Databricks OAuth credential file written into the run's
+ * ephemeral provider home; the OAuth helper reads it via
+ * `DATABRICKS_CREDENTIAL_FILE`. */
+const DATABRICKS_CREDENTIAL_FILE_NAME = "databricks-credential.json";
+
+/** Absolute path of the run's Databricks credential file within a given
+ * managed home, shared by the writer and the fingerprint stabilizer so the
+ * two can never drift. */
+function databricksCredentialFilePath(managedHome: string): string {
+  return path.join(managedHome, "provider", DATABRICKS_CREDENTIAL_FILE_NAME);
+}
+
 export function managedAiSessionFingerprintConfig(
   config: Record<string, unknown>,
   managedHome: string | undefined,
@@ -191,7 +206,75 @@ export function managedAiSessionFingerprintConfig(
   for (const [key, value] of Object.entries(managedAiHomeEnvironment(managedHome))) {
     if (env[key] === value) env[key] = stable[key];
   }
+  // The Databricks OAuth credential file also lives under the volatile run
+  // home. Neutralize its per-run path the same way as the managed-home keys
+  // above, so an unchanged Databricks connection yields a stable session
+  // fingerprint across runs instead of appearing to change every heartbeat.
+  if (env.DATABRICKS_CREDENTIAL_FILE === databricksCredentialFilePath(managedHome))
+    env.DATABRICKS_CREDENTIAL_FILE = databricksCredentialFilePath("<managed-ai-home>");
   return { ...config, env };
+}
+
+/** Bin name published by `@paperclipai/adapter-codex-local` (its package.json
+ * `bin` entry, `./dist/server/databricks-oauth-token-cli.js`) for the OAuth
+ * M2M `auth.command` helper. */
+const DATABRICKS_OAUTH_TOKEN_BIN = "paperclip-databricks-oauth-token";
+let cachedDatabricksHelperBinPath: string | undefined;
+
+/**
+ * Absolute path of the `paperclip-databricks-oauth-token` helper bin the run's
+ * Codex process spawns as its `[model_providers.databricks.auth] command`.
+ *
+ * Resolved by walking up from this module to the `node_modules` that installs
+ * `@paperclipai/adapter-codex-local` and pointing at the `node_modules/.bin`
+ * shim npm/pnpm publish for that package's `bin` — the same ancestor-walk
+ * convention the acpx engine (`findAncestorBin`) uses for the `codex-acp` bin,
+ * so it works in both the monorepo dev layout and a packaged install. The
+ * returned value is ALWAYS an absolute path and NEVER a bare command name: the
+ * Codex process must not resolve the helper through its own PATH (design 5.6).
+ */
+function resolveDatabricksHelperBinPath(): string {
+  if (cachedDatabricksHelperBinPath) return cachedDatabricksHelperBinPath;
+  // On Windows npm/pnpm publish a `.cmd` shim next to the extension-less one.
+  const shimNames =
+    process.platform === "win32"
+      ? [`${DATABRICKS_OAUTH_TOKEN_BIN}.cmd`, DATABRICKS_OAUTH_TOKEN_BIN]
+      : [DATABRICKS_OAUTH_TOKEN_BIN];
+  let current = path.dirname(fileURLToPath(import.meta.url));
+  let installedBinDir: string | undefined;
+  for (;;) {
+    const nodeModules = path.join(current, "node_modules");
+    const binDir = path.join(nodeModules, ".bin");
+    // Prefer an existing shim: it is the cross-platform executable form.
+    for (const name of shimNames) {
+      const candidate = path.join(binDir, name);
+      if (existsSync(candidate)) {
+        cachedDatabricksHelperBinPath = candidate;
+        return candidate;
+      }
+    }
+    // Otherwise remember the first `node_modules` that actually installs the
+    // adapter, so that even before `pnpm install` (re)generates the shim we
+    // still return the absolute path where it will live rather than a
+    // PATH-dependent bare name.
+    if (
+      !installedBinDir &&
+      existsSync(
+        path.join(nodeModules, "@paperclipai", "adapter-codex-local", "package.json"),
+      )
+    )
+      installedBinDir = binDir;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  if (installedBinDir) {
+    cachedDatabricksHelperBinPath = path.join(installedBinDir, shimNames[0]);
+    return cachedDatabricksHelperBinPath;
+  }
+  throw new Error(
+    `Unable to resolve the ${DATABRICKS_OAUTH_TOKEN_BIN} helper published by @paperclipai/adapter-codex-local`,
+  );
 }
 
 export async function prepareManagedAiRuntime(
@@ -279,7 +362,10 @@ export async function prepareManagedAiRuntime(
         { mode: 0o600 },
       );
     if (subscriptionFile) await writeFile(authFile, value, { mode: 0o600 });
-    else env[capability.envKey] = value;
+    // `capability.envKey` is optional: `oauth_m2m` (Databricks) has none, so
+    // the resolved credential is never injected as an environment variable —
+    // it is written to a protected file below instead (Property 3/8).
+    else if (capability.envKey) env[capability.envKey] = value;
     if (
       input.binding.provider === "openai" &&
       selection.attribution.method === "api_key"
@@ -295,26 +381,65 @@ export async function prepareManagedAiRuntime(
       });
       env.OPENCODE_DISABLE_PROJECT_CONFIG = "true";
     }
-    // Databricks: the generic api_key branch above already set
-    // env.DATABRICKS_TOKEN via capability.envKey. What's still missing is the
-    // per-run routing hint (workspace base URL + wire API) the codex_local
-    // adapter needs to point Codex at the workspace's Unity Gateway instead
-    // of OpenAI. Read the non-secret workspace config already present on
-    // `selection.connection.config.databricks` (persisted by `save()`) —
-    // reusing the row from the generic `service.select()` call above avoids a
-    // second grant/audience/revocation resolution path that could disagree
-    // with this one (e.g. if a grant is revoked between two separate calls).
+    // Databricks: unlike the api_key/subscription providers above, the resolved
+    // secret is never injected as an environment variable (there is no
+    // `capability.envKey` for `oauth_m2m`). The value is a JSON
+    // `{ clientId, clientSecret }` pair (design 6.2); the run's Codex process
+    // authenticates through the external OAuth M2M helper, which reads the
+    // credential from a 0600 file inside the ephemeral run home and never from
+    // env/argv (Property 3/8). Alongside the credential file we attach a
+    // per-run routing hint (workspace base URL, wire API, and the helper's
+    // absolute command) so the codex_local adapter points Codex at the
+    // workspace's Unity Gateway instead of OpenAI. The non-secret workspace
+    // config is read from `selection.connection.config.databricks` (persisted
+    // by `save()`), reusing the row already resolved by the `service.select()`
+    // calls above so a second grant/audience/revocation resolution cannot
+    // disagree with this one (e.g. if a grant is revoked between two calls).
     let providerRuntimeHint:
-      | { provider: "databricks"; baseUrl: string; wireApi: "responses" }
+      | {
+          provider: "databricks";
+          baseUrl: string;
+          wireApi: "responses";
+          authCommand: string;
+          authArgs: string[];
+          authTimeoutMs: number;
+          authRefreshIntervalMs: number;
+        }
       | undefined;
     if (input.binding.provider === "databricks") {
       const databricksConfig = databricksConnectionConfigSchema.parse(
         (selection.connection.config as { databricks?: unknown }).databricks,
       );
+      const { clientId, clientSecret } = databricksOAuthCredentialSchema.parse(
+        JSON.parse(value),
+      );
+      // 0600 credential file inside the ephemeral run home. The OAuth helper
+      // receives only its path (via `DATABRICKS_CREDENTIAL_FILE`), never the
+      // secret itself. `writeFile` both creates the file and restricts it in
+      // one call; a create/permission failure throws, which the outer `catch`
+      // turns into an aborted preparation — no usable `config` is returned, so
+      // the Codex process never starts. The file lives under `home`, so the
+      // existing `rm(home, { recursive: true, force: true })` in `cleanup()`
+      // removes it.
+      const credentialFile = databricksCredentialFilePath(home);
+      await writeFile(
+        credentialFile,
+        JSON.stringify({
+          host: databricksConfig.workspaceHost,
+          clientId,
+          clientSecret,
+        }),
+        { mode: 0o600 },
+      );
+      env.DATABRICKS_CREDENTIAL_FILE = credentialFile;
       providerRuntimeHint = {
         provider: "databricks",
         baseUrl: `${databricksConfig.workspaceHost}/ai-gateway/codex/v1`,
         wireApi: "responses",
+        authCommand: resolveDatabricksHelperBinPath(),
+        authArgs: [],
+        authTimeoutMs: 5_000,
+        authRefreshIntervalMs: 1_800_000,
       };
     }
     const generation = createHash("sha256")

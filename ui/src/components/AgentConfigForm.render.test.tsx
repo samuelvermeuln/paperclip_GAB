@@ -1079,6 +1079,122 @@ describe("AgentConfigForm environment selector", () => {
     await flushReact();
   });
 
+  it("disables combo discovery when the databricks binding has no eligible connection", async () => {
+    // Requirement 7.7 / 7.1: a databricks binding whose connection is deferred to
+    // the responsible user carries no client-side connection id, so it is not
+    // eligible for combo discovery. The form must not query the model-discovery
+    // endpoint for it, and it must not flag the saved combo as Unavailable on the
+    // strength of a discovery that never ran. A non-databricks agent (no binding)
+    // instead falls back to the plain "Model" selector; that fall-back is covered
+    // by "keeps the model field labeled Model for a non-databricks connection".
+    mockAgentsApi.adapterModels.mockResolvedValue([
+      { id: "main.paperclip.combo_ux", label: "Combo UX" },
+    ]);
+    const result = await renderForm(
+      [makeEnvironment({ id: "local-1", name: "Local", driver: "local" })],
+      {
+        adapterConfig: { model: "main.paperclip.combo_ux" },
+        runtimeConfig: {
+          aiConnection: {
+            provider: "databricks",
+            method: "oauth_m2m",
+            mode: "responsible_user",
+          },
+        },
+      },
+    );
+    roots.push(result.root);
+
+    // It is still the Databricks combo field, but discovery is gated off: no
+    // resolvable connection id means the model-discovery endpoint is never hit.
+    const labels = Array.from(result.container.querySelectorAll("label")).map((label) =>
+      label.textContent?.trim(),
+    );
+    expect(labels).toContain("Combo");
+    expect(mockAgentsApi.adapterModels).not.toHaveBeenCalled();
+
+    // The saved combo is preserved unchanged and is not treated as gone, because
+    // no successful discovery ever confirmed its absence.
+    expect(result.container.textContent).toContain("main.paperclip.combo_ux");
+    expect(document.body.textContent).not.toContain("Unavailable");
+  });
+
+  it("shows a classified error indication and preserves the selected combo when discovery fails", async () => {
+    // Requirement 7.8: a failed combo listing (network or a classified error such
+    // as rate limiting) surfaces an error identifying the failure while the saved
+    // combo stays selected and is never flagged Unavailable.
+    mockAgentsApi.adapterModels.mockRejectedValue(
+      new ApiError("Databricks rate limit exceeded", 429, { error: "rate_limited" }),
+    );
+    const result = await renderForm(
+      [makeEnvironment({ id: "local-1", name: "Local", driver: "local" })],
+      {
+        adapterConfig: { model: "main.paperclip.combo_ux" },
+        runtimeConfig: {
+          aiConnection: {
+            provider: "databricks",
+            method: "oauth_m2m",
+            mode: "shared",
+            connectionId: "11111111-1111-4111-8111-111111111111",
+            grantId: "22222222-2222-4222-8222-222222222222",
+          },
+        },
+      },
+    );
+    roots.push(result.root);
+
+    // The classified failure message is rendered inline.
+    expect(result.container.textContent).toContain("Databricks rate limit exceeded");
+    // The saved combo is preserved unchanged in the trigger.
+    expect(result.container.textContent).toContain("main.paperclip.combo_ux");
+    // A failed fetch is never treated as proof the combo is gone.
+    expect(document.body.textContent).not.toContain("Unavailable");
+  });
+
+  it("indicates no combos are available when discovery returns an empty list", async () => {
+    // Requirement 7.9: an empty combo list shows an indication that nothing was
+    // found for the selected connection, and no stale combo entries render.
+    mockAgentsApi.adapterModels.mockResolvedValue([]);
+    const result = await renderForm(
+      [makeEnvironment({ id: "local-1", name: "Local", driver: "local" })],
+      {
+        // No saved combo, so the Unavailable path is not involved here.
+        adapterConfig: {},
+        runtimeConfig: {
+          aiConnection: {
+            provider: "databricks",
+            method: "oauth_m2m",
+            mode: "shared",
+            connectionId: "11111111-1111-4111-8111-111111111111",
+            grantId: "22222222-2222-4222-8222-222222222222",
+          },
+        },
+      },
+    );
+    roots.push(result.root);
+
+    // The discovery call was made for the databricks connection and came back empty.
+    expect(mockAgentsApi.adapterModels).toHaveBeenCalledWith(
+      "company-1",
+      "codex_local",
+      expect.objectContaining({ provider: "databricks", connectionId: "11111111-1111-4111-8111-111111111111" }),
+    );
+
+    // Open the combo dropdown (trigger shows the default label when no combo is set).
+    const trigger = findButton(result.container, "Default");
+    expect(trigger).toBeTruthy();
+    await act(async () => {
+      trigger!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    // The empty-state indication is shown and no combo entries are rendered.
+    expect(document.body.textContent).toContain("No model detected. Select or enter one manually.");
+    const popoverButtons = Array.from(document.body.querySelectorAll("button"))
+      .filter((button) => !result.container.contains(button));
+    expect(popoverButtons.some((button) => button.textContent?.includes("Combo"))).toBe(false);
+  });
+
   it("removes a legacy incompatible effort when the model changes to Astra", async () => {
     mockAgentsApi.adapterModels.mockResolvedValue([
       { id: "gpt-5.6-sol", label: "gpt-5.6-sol" },

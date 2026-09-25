@@ -557,13 +557,16 @@ export async function testCodexAcpEnvironment(
         : null;
     const configuredApiKey = configApiKey ?? hostApiKey;
     const configuredCodexHome = isNonEmpty(envConfig.CODEX_HOME) ? envConfig.CODEX_HOME : null;
-    // Databricks readiness: derive `activeProvider`/`configuredDatabricksToken`
-    // the same way `execute.ts` does for the CLI/exec path, so an agent whose
-    // resolved AI Connection binding is Databricks reports ready here too when
-    // its DATABRICKS_TOKEN is set, without requiring OPENAI_API_KEY.
+    // Databricks readiness: derive `activeProvider`/`databricksAuthCommand`/
+    // `databricksCredentialFile` the same way `execute.ts` does for the
+    // CLI/exec path, so an agent whose resolved AI Connection binding is
+    // Databricks reports ready here too when its OAuth M2M helper is configured
+    // and its ephemeral credential file is present, without requiring
+    // OPENAI_API_KEY.
     const providerRuntimeHint = readDatabricksProviderRuntimeHint(config);
-    const configuredDatabricksToken = isNonEmpty(envConfig.DATABRICKS_TOKEN)
-      ? envConfig.DATABRICKS_TOKEN
+    const databricksAuthCommand = providerRuntimeHint?.authCommand ?? null;
+    const databricksCredentialFile = isNonEmpty(envConfig.DATABRICKS_CREDENTIAL_FILE)
+      ? envConfig.DATABRICKS_CREDENTIAL_FILE
       : null;
     const credentialReadiness = await evaluateCodexCredentialReadiness({
       env: process.env,
@@ -571,7 +574,8 @@ export async function testCodexAcpEnvironment(
       configuredCodexHome,
       configuredApiKey,
       activeProvider: providerRuntimeHint?.provider,
-      configuredDatabricksToken,
+      databricksAuthCommand,
+      databricksCredentialFile,
     });
 
     if (credentialReadiness.ready && credentialReadiness.authMode === "api") {
@@ -593,7 +597,7 @@ export async function testCodexAcpEnvironment(
         code: "codex_acp_native_auth_detected",
         level: "info",
         message: "Codex ACP can authenticate through the Databricks Unity Gateway.",
-        detail: "DATABRICKS_TOKEN is set for this run; OPENAI_API_KEY is not required.",
+        detail: "This run's Databricks OAuth helper and credential file are configured; OPENAI_API_KEY is not required.",
       });
     } else if (credentialReadiness.ready) {
       checks.push({
@@ -618,11 +622,12 @@ export async function testCodexAcpEnvironment(
     const configuredCodexHome = isNonEmpty(envConfig.CODEX_HOME) ? envConfig.CODEX_HOME : null;
     // Databricks readiness: same derivation as the non-remote branch above.
     // The sandbox is not seeded with the host's OPENAI_API_KEY, but a
-    // Databricks-active run authenticates via DATABRICKS_TOKEN regardless of
-    // execution target, so it is derived here the same way.
+    // Databricks-active run authenticates through the external OAuth M2M helper
+    // regardless of execution target, so it is derived here the same way.
     const providerRuntimeHint = readDatabricksProviderRuntimeHint(config);
-    const configuredDatabricksToken = isNonEmpty(envConfig.DATABRICKS_TOKEN)
-      ? envConfig.DATABRICKS_TOKEN
+    const databricksAuthCommand = providerRuntimeHint?.authCommand ?? null;
+    const databricksCredentialFile = isNonEmpty(envConfig.DATABRICKS_CREDENTIAL_FILE)
+      ? envConfig.DATABRICKS_CREDENTIAL_FILE
       : null;
     const credentialReadiness = await evaluateCodexCredentialReadiness({
       env: process.env,
@@ -630,14 +635,15 @@ export async function testCodexAcpEnvironment(
       configuredCodexHome,
       configuredApiKey: configApiKey,
       activeProvider: providerRuntimeHint?.provider,
-      configuredDatabricksToken,
+      databricksAuthCommand,
+      databricksCredentialFile,
     });
     if (credentialReadiness.ready && credentialReadiness.authMode === "databricks") {
       checks.push({
         code: "codex_acp_native_auth_detected",
         level: "info",
         message: "Codex ACP can authenticate through the Databricks Unity Gateway.",
-        detail: "DATABRICKS_TOKEN is set for this run; OPENAI_API_KEY is not required.",
+        detail: "This run's Databricks OAuth helper and credential file are configured; OPENAI_API_KEY is not required.",
       });
     } else if (!credentialReadiness.ready) {
       // Emit the neutral canonical check so the user interface can decide login

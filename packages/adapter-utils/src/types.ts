@@ -260,11 +260,14 @@ export interface AdapterModelDiscoveryContext {
   refresh?: boolean;
   /** Resolved server-side only; never serialized back to the client. */
   resolvedCredential?: {
-    token: string;
     host: string;
+    clientId: string;
+    clientSecret: string;
     catalog: string;
     schema: string;
     modelPrefix?: string;
+    /** Credential version (rotation/reconnect); part of the discovery cache key. */
+    credentialVersion: string;
   };
 }
 

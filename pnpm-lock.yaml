@@ -1184,8 +1184,8 @@ importers:
         specifier: ^1.38.0
         version: 1.38.0(react@19.2.8)
       mermaid:
-        specifier: ^11.17.2
-        version: 11.17.2
+        specifier: ^12.0.0
+        version: 12.0.0
       motion:
         specifier: ^13.1.1
         version: 13.1.1(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
@@ -1287,8 +1287,8 @@ packages:
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
-  '@antfu/install-pkg@1.1.0':
-    resolution: {integrity: sha512-MGQsmw10ZyI+EJo45CdSER4zEb+p31LpDAFp2Z3gkSd1yqVZGi0Ebx++YTEMonJy4oChEMLsxZ64j8FH6sSqtQ==}
+  '@antfu/install-pkg@2.1.0':
+    resolution: {integrity: sha512-sdg9NxU3zR4Mnawfbc/x6GB5Wf17WYud5qOuEuxXjaKpYpMkISSJEjItGebXJ2bQ4DIcly4NYH23mtkGJjvKUw==}
 
   '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.263':
     resolution: {integrity: sha512-H4eLd4Tkx3rJkt739CHb+9AcaKiiOpibU4tYsmma47mV+2zAPjUyFxpuE2N57VSmpAgbLQxu44du0TFN+UH5dg==}
@@ -1723,8 +1723,20 @@ packages:
     resolution: {integrity: sha512-mzifgrQ50UTrBOqzcqiixK9FlNUniqgfBSOAXWyufDr/1xTHibbmSxVeHqnuupGEwqOX2o4r7bl0TwoG7qJ2yQ==}
     engines: {node: '>=20'}
 
+  '@chevrotain/cst-dts-gen@11.1.2':
+    resolution: {integrity: sha512-XTsjvDVB5nDZBQB8o0o/0ozNelQtn2KrUVteIHSlPd2VAV2utEb6JzyCJaJ8tGxACR4RiBNWy5uYUHX2eji88Q==}
+
+  '@chevrotain/gast@11.1.2':
+    resolution: {integrity: sha512-Z9zfXR5jNZb1Hlsd/p+4XWeUFugrHirq36bKzPWDSIacV+GPSVXdk+ahVWZTwjhNwofAWg/sZg58fyucKSQx5g==}
+
+  '@chevrotain/regexp-to-ast@11.1.2':
+    resolution: {integrity: sha512-nMU3Uj8naWer7xpZTYJdxbAs6RIv/dxYzkYU8GSwgUtcAAlzjcPfX1w+RKRcYG8POlzMeayOQ/znfwxEGo5ulw==}
+
   '@chevrotain/types@11.1.2':
     resolution: {integrity: sha512-U+HFai5+zmJCkK86QsaJtoITlboZHBqrVketcO2ROv865xfCMSFpELQoz1GkX5GzME8pTa+3kbKrZHQtI0gdbw==}
+
+  '@chevrotain/utils@11.1.2':
+    resolution: {integrity: sha512-4mudFAQ6H+MqBTfqLmU7G1ZwRzCLfJEooL/fsF6rCX5eePMbGhoy5n4g+G4vlh2muDcsCTJtL+uKbOzWxs5LHA==}
 
   '@clack/core@1.4.3':
     resolution: {integrity: sha512-/kr3UWNtdJfxZtPgDqUOmG2pvwlmcLGheex5yiZKdwbzZJxhV+HMNR9QNmyY5cGwTNV6LrR7Jtp+KjhUAP1qBQ==}
@@ -2592,8 +2604,8 @@ packages:
   '@iconify/types@2.0.0':
     resolution: {integrity: sha512-+wluvCrRhXrhyOmRDJ3q8mux9JkKy5SJ/v8ol2tu4FVjyYvtEzkc/3pK15ET6RKg4b4w4BmTk1+gsCUhf21Ykg==}
 
-  '@iconify/utils@3.1.4':
-    resolution: {integrity: sha512-b1S7B1k9ohZ+iNTi2ATxbRYG9fTrJmUT0rc46bvVnNxqNRGW7dyo/vRREwyniI5IRN2RSJHDcm+s3BjWrSAjHw==}
+  '@iconify/utils@3.1.7':
+    resolution: {integrity: sha512-JZHlwdID+dy+lTgbYC8NEC4zeugqeYsc6jewvzb4c58kHauJn+X7rNwQjxz5p2qSjqaEeQoLkCIQ9v/H4PK0/w==}
 
   '@img/colour@1.1.0':
     resolution: {integrity: sha512-Td76q7j57o/tLVdgS746cYARfSyxk8iEfRxewL9h4OMzYhbW4TAcppl0mT4eyqXddh6L/jwoM75mo7ixa/pCeQ==}
@@ -3042,8 +3054,9 @@ packages:
       react: ^19.2.8
       react-dom: ^19.2.8
 
-  '@mermaid-js/parser@1.2.1':
-    resolution: {integrity: sha512-n12NohV3mrUyUL2o93IgG/ifeW9FTyeJn3zDxkhwa8MJ9Fxg3HQMlA3RiGmD/3UnJvheztkjjQAjA2T4LmUcpw==}
+  '@mermaid-js/parser@2.0.0':
+    resolution: {integrity: sha512-K8BeapFUfrfxbRAUQAG5oBOCwo1+bNWzaVnPxTCutkfrTBn6T/j91FIhqxWJ32SUeQ9T3iy1zcmPZ5ROZEvDrg==}
+    engines: {node: '>=22.12.0'}
 
   '@microsoft/teams.api@2.0.16':
     resolution: {integrity: sha512-ds2SK6JvAcDL1EfVYWJ1Cmvyytm3CIfdPZS7CxYPvsebhfnMNmvxQlDFuh0Hh0hmjLxIJtycqBddMVulZITs1w==}
@@ -5110,8 +5123,8 @@ packages:
   '@types/d3-scale@4.0.9':
     resolution: {integrity: sha512-dLmtwB8zkAeO/juAMfnV+sItKjlsw2lKdZVVy6LRr0cBmegxSABiLEpGVmSJJ8O08i4+sGR6qQtb6WtuwJdvVw==}
 
-  '@types/d3-selection@3.0.11':
-    resolution: {integrity: sha512-bhAXu23DJWsrI45xafYpkQ4NtcKMwWnAC/vKrd2l+nxMFuvOT3XMYTIj2opv8vq8AO5Yh7Qac/nSeP/3zjTK0w==}
+  '@types/d3-selection@3.0.12':
+    resolution: {integrity: sha512-Qe/KWYhEiIIxGs7HrAAjMfShxKldx19SJtr5zu53f3afPsdZNz7HHtdTLXo/kqeiWNXVycI24kSnfzBYkTzpgw==}
 
   '@types/d3-shape@3.2.0':
     resolution: {integrity: sha512-kVd74ta9eof3eJOvbNd1vGKS/XERRyQbT26Og63hIsvDO84cjD5gEOhsXf26w3FSoNlPVz84DOFcKv/oou+fMw==}
@@ -5875,6 +5888,9 @@ packages:
     resolution: {integrity: sha512-PAJdDJusoxnwm1VwW07VWwUN1sl7smmC3OKggvndJFadxxDRyFJBX/ggnu/KE4kQAB7a3Dp8f/YXC1FlUprWmA==}
     engines: {node: '>= 16'}
 
+  chevrotain@11.1.2:
+    resolution: {integrity: sha512-opLQzEVriiH1uUQ4Kctsd49bRoFDXGGSC4GUqj7pGyxM3RehRhvTlZJc1FL/Flew2p5uwxa1tUDWKzI4wNM8pg==}
+
   chokidar@5.0.0:
     resolution: {integrity: sha512-TQMmc3w+5AxjpL8iIiwebF73dRDF4fBIieAqGn9RGCWaEVwQ6Fb2cGe31Yns0RRIzii5goJ1Y7xbMwo1TxMplw==}
     engines: {node: '>= 20.19.0'}
@@ -6030,8 +6046,8 @@ packages:
     peerDependencies:
       cytoscape: ^3.2.0
 
-  cytoscape@3.34.2:
-    resolution: {integrity: sha512-Cm2jaj1X/PBNlzV9yH8zcfGOxO7U+CJ/+mxSBVPSchLaugdp4jtlGx5qaHtPRZ6tgiZ5P+o1XoRfJA+ba6KM3g==}
+  cytoscape@3.34.3:
+    resolution: {integrity: sha512-yfYGhRcGAntq6YBD583j4n0Eg3jIxvWmZtz/5uz9UYkeIStSlMxuUja+ec5j3iBD8nv1rwaOAYMW09tBdkSeaQ==}
     engines: {node: '>=0.10'}
 
   d3-array@2.12.1:
@@ -6296,6 +6312,9 @@ packages:
   dompurify@3.4.14:
     resolution: {integrity: sha512-dVoH9z+MY+C9IilgGCk3YfFqjLi3fChm2OiKJMzh6axrJ5qwxqWaZamgmHrpv22CN/KdbZJuGEGgfQoL00LTdg==}
 
+  dompurify@3.4.16:
+    resolution: {integrity: sha512-sqo+pNp3qRhCIpbgRi1y8Tgk27Bo2Ry7w0dC1NBeNTdZChWjz9Xb/KOoZbRP/R6pQZ80Qw8YhXw13hWWBbMRnQ==}
+
   dotenv@17.4.2:
     resolution: {integrity: sha512-nI4U3TottKAcAD9LLud4Cb7b2QztQMUEfHbvhTH09bqXTxnSie8WnjPALV/WMCrJZ6UV/qHJ6L03OqO3LcdYZw==}
     engines: {node: '>=12'}
@@ -6416,6 +6435,9 @@ packages:
 
   electron-to-chromium@1.5.409:
     resolution: {integrity: sha512-ChI4N44d0B4A6C8prnNjMOaGgE59fUyEVYcRYm2XEXIjMbbvF5i9UL1cblDbpGqiU0uS8FE8UcKxqZqTXdmzbQ==}
+
+  elkjs@0.9.3:
+    resolution: {integrity: sha512-f/ZeWvW/BCXbhGEf1Ujp29EASo/lk1FDnETgNKwJrsVvGZhUWCZyg3xLJjAsxfOmt8KjswHmI5EwCQcPMpOYhQ==}
 
   embedded-postgres@18.1.0-beta.16:
     resolution: {integrity: sha512-TDp7Ld0h84x5fzIIZFyreYWqZrxUNjuXB6OxqJCmV6PodB2vzQ+1hlL6n4uK1de7bIAxYt5OkDykwcuIONQdQg==}
@@ -6590,9 +6612,6 @@ packages:
 
   fast-wrap-ansi@0.2.2:
     resolution: {integrity: sha512-7F2Fl+TjRSenLqlU3UjSH0iyqopqoZIu7eZVpEirP2g1GtWa2G/ecEmBdgz31+Mxr+ELclgg6sokpSFIQiZ02Q==}
-
-  fastdom@1.0.12:
-    resolution: {integrity: sha512-LB+xjSTEbjHE1cWsxu+tN2Xqr1kpi+V9aADI7sVM5ZMaXyYGPHULQMzpJMYqOTULK/73pUkWVzzObFRBkPr+hg==}
 
   fault@2.0.1:
     resolution: {integrity: sha512-WtySTkS4OKev5JtpHXnib4Gxiurzh5NCGvWrFaZ34m6JehfTUhKZvn9njTfw48t6JumVQOmrKqpmGcdwxnhqBQ==}
@@ -7208,6 +7227,9 @@ packages:
   limiter@1.1.5:
     resolution: {integrity: sha512-FWWMIEOxz3GwUI4Ts/IvgVy6LPvoMPgjMdQ185nN6psJyBJ4yOpzqm695/h5umdLJg2vW3GR5iG11MAkR2AzJA==}
 
+  lodash-es@4.17.23:
+    resolution: {integrity: sha512-kVI48u3PZr38HdYz98UmfPnXl2DXrpdctLrFLCd3kOx1xUkOmpFPx7gCWWM5MPkL/fD8zb+Ph0QzjGFs4+hHWg==}
+
   lodash-es@4.18.1:
     resolution: {integrity: sha512-J8xewKD/Gk22OZbhpOVSwcs60zhd95ESDwezOFuA3/099925PdHJ7OFHNTGtajL3AlZkykD32HykiMo+BIBI8A==}
 
@@ -7379,8 +7401,9 @@ packages:
   merge-stream@2.0.0:
     resolution: {integrity: sha512-abv/qOcuPfk3URPfDzmZU1LKmuw8kT+0nIHvKrKgFrwifol/doWcdA4ZqsWQ8ENrFKkd67Mfpo/LovbIUsbt3w==}
 
-  mermaid@11.17.2:
-    resolution: {integrity: sha512-V6K3C8EBdEsPFZXSKMJe6ppQOENxuHARr9GvHX4hh47lAbhMRD9qf4oEK7LoaRQxULMa80/qt5gHO73aCleBBg==}
+  mermaid@12.0.0:
+    resolution: {integrity: sha512-/wQXC9iBxoGV8p3erbvaXs9h77VyLDBH6GdayVjj3hEcSQhFU4N1WUhUppotCEqlIxI2pRMwjwBSwTB1MfZBgQ==}
+    engines: {node: '>=22.12.0'}
 
   meshoptimizer@1.1.1:
     resolution: {integrity: sha512-oRFNWJRDA/WTrVj7NWvqa5HqE1t9MYDj2VaWirQCzCCrAd2GHrqR/sQezCxiWATPNlKTcRaPRHPJwIRoPBAp5g==}
@@ -7662,6 +7685,7 @@ packages:
 
   opencode-ai@1.18.29:
     resolution: {integrity: sha512-syIDVwlrYTgTOXzZe9SkInJWethbq6l3SNC762UeXyO0a9V0wGfd+U4yACvppwNBnhIsl0j2QPYYCyLpNaSomg==}
+    cpu: [arm64, x64]
     os: [darwin, linux, win32]
     hasBin: true
 
@@ -8395,9 +8419,6 @@ packages:
   streamx@2.28.0:
     resolution: {integrity: sha512-1Yowhzjf0ivGMrTIkY9hav5TxobO9qIVqUE41fiCGMGgc3CLlf4MY+9AHmZqBWgDTue0fY9zWjYFVyf6Diuobw==}
 
-  strictdom@1.0.1:
-    resolution: {integrity: sha512-cEmp9QeXXRmjj/rVp9oyiqcvyocWab/HaoN4+bwFeZ7QzykJD6L3yD4v12K1x0tHpqRqVpJevN3gW7kyM39Bqg==}
-
   string-width@4.2.3:
     resolution: {integrity: sha512-wKyQRQpjJ0sIp62ErSZdGsjMJWsap5oRNihHhu6G7JVO/9jIB6UyevL+tXuOqrng8j/cxKTWyWUwvSTriiZz/g==}
     engines: {node: '>=8'}
@@ -9052,7 +9073,7 @@ snapshots:
     dependencies:
       zod: 4.4.3
 
-  '@antfu/install-pkg@1.1.0':
+  '@antfu/install-pkg@2.1.0':
     dependencies:
       package-manager-detector: 1.8.0
       tinyexec: 1.3.1
@@ -9630,7 +9651,22 @@ snapshots:
       - workflow
       - zod
 
+  '@chevrotain/cst-dts-gen@11.1.2':
+    dependencies:
+      '@chevrotain/gast': 11.1.2
+      '@chevrotain/types': 11.1.2
+      lodash-es: 4.17.23
+
+  '@chevrotain/gast@11.1.2':
+    dependencies:
+      '@chevrotain/types': 11.1.2
+      lodash-es: 4.17.23
+
+  '@chevrotain/regexp-to-ast@11.1.2': {}
+
   '@chevrotain/types@11.1.2': {}
+
+  '@chevrotain/utils@11.1.2': {}
 
   '@clack/core@1.4.3':
     dependencies:
@@ -10432,9 +10468,9 @@ snapshots:
 
   '@iconify/types@2.0.0': {}
 
-  '@iconify/utils@3.1.4':
+  '@iconify/utils@3.1.7':
     dependencies:
-      '@antfu/install-pkg': 1.1.0
+      '@antfu/install-pkg': 2.1.0
       '@iconify/types': 2.0.0
       import-meta-resolve: 4.2.0
 
@@ -10990,7 +11026,7 @@ snapshots:
       react: 19.2.8
       react-dom: 19.2.8(react@19.2.8)
 
-  '@mermaid-js/parser@1.2.1':
+  '@mermaid-js/parser@2.0.0':
     dependencies:
       '@chevrotain/types': 11.1.2
 
@@ -12902,11 +12938,11 @@ snapshots:
 
   '@types/d3-axis@3.0.6':
     dependencies:
-      '@types/d3-selection': 3.0.11
+      '@types/d3-selection': 3.0.12
 
   '@types/d3-brush@3.0.6':
     dependencies:
-      '@types/d3-selection': 3.0.11
+      '@types/d3-selection': 3.0.12
 
   '@types/d3-chord@3.0.6': {}
 
@@ -12923,7 +12959,7 @@ snapshots:
 
   '@types/d3-drag@3.0.7':
     dependencies:
-      '@types/d3-selection': 3.0.11
+      '@types/d3-selection': 3.0.12
 
   '@types/d3-dsv@3.0.7': {}
 
@@ -12961,7 +12997,7 @@ snapshots:
     dependencies:
       '@types/d3-time': 3.0.4
 
-  '@types/d3-selection@3.0.11': {}
+  '@types/d3-selection@3.0.12': {}
 
   '@types/d3-shape@3.2.0':
     dependencies:
@@ -12975,12 +13011,12 @@ snapshots:
 
   '@types/d3-transition@3.0.9':
     dependencies:
-      '@types/d3-selection': 3.0.11
+      '@types/d3-selection': 3.0.12
 
   '@types/d3-zoom@3.0.8':
     dependencies:
       '@types/d3-interpolate': 3.0.4
-      '@types/d3-selection': 3.0.11
+      '@types/d3-selection': 3.0.12
 
   '@types/d3@7.4.3':
     dependencies:
@@ -13007,7 +13043,7 @@ snapshots:
       '@types/d3-random': 3.0.4
       '@types/d3-scale': 4.0.9
       '@types/d3-scale-chromatic': 3.1.0
-      '@types/d3-selection': 3.0.11
+      '@types/d3-selection': 3.0.12
       '@types/d3-shape': 3.2.0
       '@types/d3-time': 3.0.4
       '@types/d3-time-format': 4.0.3
@@ -13656,6 +13692,15 @@ snapshots:
 
   check-error@2.1.3: {}
 
+  chevrotain@11.1.2:
+    dependencies:
+      '@chevrotain/cst-dts-gen': 11.1.2
+      '@chevrotain/gast': 11.1.2
+      '@chevrotain/regexp-to-ast': 11.1.2
+      '@chevrotain/types': 11.1.2
+      '@chevrotain/utils': 11.1.2
+      lodash-es: 4.17.23
+
   chokidar@5.0.0:
     dependencies:
       readdirp: 5.1.1
@@ -13793,17 +13838,17 @@ snapshots:
 
   csstype@3.2.3: {}
 
-  cytoscape-cose-bilkent@4.1.0(cytoscape@3.34.2):
+  cytoscape-cose-bilkent@4.1.0(cytoscape@3.34.3):
     dependencies:
       cose-base: 1.0.3
-      cytoscape: 3.34.2
+      cytoscape: 3.34.3
 
-  cytoscape-fcose@2.2.0(cytoscape@3.34.2):
+  cytoscape-fcose@2.2.0(cytoscape@3.34.3):
     dependencies:
       cose-base: 2.2.0
-      cytoscape: 3.34.2
+      cytoscape: 3.34.3
 
-  cytoscape@3.34.2: {}
+  cytoscape@3.34.3: {}
 
   d3-array@2.12.1:
     dependencies:
@@ -14083,6 +14128,10 @@ snapshots:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
 
+  dompurify@3.4.16:
+    optionalDependencies:
+      '@types/trusted-types': 2.0.7
+
   dotenv@17.4.2: {}
 
   downshift@7.6.2(react@19.2.8):
@@ -14123,6 +14172,8 @@ snapshots:
   ee-first@1.1.1: {}
 
   electron-to-chromium@1.5.409: {}
+
+  elkjs@0.9.3: {}
 
   embedded-postgres@18.1.0-beta.16(patch_hash=55uhvnotpqyiy37rn3pqpukhei):
     dependencies:
@@ -14386,10 +14437,6 @@ snapshots:
   fast-wrap-ansi@0.2.2:
     dependencies:
       fast-string-width: 3.0.2
-
-  fastdom@1.0.12:
-    dependencies:
-      strictdom: 1.0.1
 
   fault@2.0.1:
     dependencies:
@@ -15003,6 +15050,8 @@ snapshots:
 
   limiter@1.1.5: {}
 
+  lodash-es@4.17.23: {}
+
   lodash-es@4.18.1: {}
 
   lodash.camelcase@4.3.0: {}
@@ -15276,23 +15325,24 @@ snapshots:
 
   merge-stream@2.0.0: {}
 
-  mermaid@11.17.2:
+  mermaid@12.0.0:
     dependencies:
       '@braintree/sanitize-url': 7.1.2
-      '@iconify/utils': 3.1.4
-      '@mermaid-js/parser': 1.2.1
+      '@iconify/utils': 3.1.7
+      '@mermaid-js/parser': 2.0.0
       '@types/d3': 7.4.3
       '@upsetjs/venn.js': 2.0.0
-      cytoscape: 3.34.2
-      cytoscape-cose-bilkent: 4.1.0(cytoscape@3.34.2)
-      cytoscape-fcose: 2.2.0(cytoscape@3.34.2)
+      chevrotain: 11.1.2
+      cytoscape: 3.34.3
+      cytoscape-cose-bilkent: 4.1.0(cytoscape@3.34.3)
+      cytoscape-fcose: 2.2.0(cytoscape@3.34.3)
       d3: 7.9.0
       d3-sankey: 0.12.3
       dagre-d3-es: 7.0.14
       dayjs: 1.11.23
-      dompurify: 3.4.14
+      dompurify: 3.4.16
+      elkjs: 0.9.3
       es-toolkit: 1.52.0
-      fastdom: 1.0.12
       katex: 0.16.47
       khroma: 2.1.0
       marked: 16.4.2
@@ -16690,8 +16740,6 @@ snapshots:
     transitivePeerDependencies:
       - bare-abort-controller
       - react-native-b4a
-
-  strictdom@1.0.1: {}
 
   string-width@4.2.3:
     dependencies:

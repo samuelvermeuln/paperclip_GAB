@@ -253,11 +253,69 @@ describe("OnboardingWizard adapter selection", () => {
     const saved = JSON.parse(
       window.localStorage.getItem(ONBOARDING_STORAGE_KEY) ?? "{}",
     );
-    expect(saved.adapterType).toBe("claude_local");
+    // The default source: Databricks, on the Codex harness.
+    expect(saved.adapterType).toBe("codex_local");
+    expect(saved.modelSource).toBe("databricks");
     expect(saved.model).toBe("");
     expect(saved.command).toBe("");
     expect(saved.args).toBe("");
     expect(saved.url).toBe("");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("defaults a fresh wizard to the Databricks source on the Codex harness", async () => {
+    mockAdapterRegistry.list = [{ type: "claude_local" }, { type: "codex_local" }];
+
+    const { root } = await mount();
+
+    const saved = JSON.parse(
+      window.localStorage.getItem(ONBOARDING_STORAGE_KEY) ?? "{}",
+    );
+    expect(saved.adapterType).toBe("codex_local");
+    expect(saved.modelSource).toBe("databricks");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("restores a pre-Databricks draft as the adapter's own provider", async () => {
+    // A draft from before the Databricks source existed names only an
+    // adapter. `codex_local` then meant OpenAI, and must not turn into
+    // Databricks on restore.
+    mockAdapterRegistry.list = [{ type: "claude_local" }, { type: "codex_local" }];
+    window.localStorage.setItem(
+      ONBOARDING_STORAGE_KEY,
+      JSON.stringify({ step: 0, adapterType: "codex_local" }),
+    );
+
+    const { root } = await mount();
+
+    const saved = JSON.parse(
+      window.localStorage.getItem(ONBOARDING_STORAGE_KEY) ?? "{}",
+    );
+    expect(saved.adapterType).toBe("codex_local");
+    expect(saved.modelSource).toBe("codex_local");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("leaves the Databricks source when the Codex harness is disabled", async () => {
+    mockAdapterRegistry.list = [{ type: "claude_local" }, { type: "codex_local" }];
+    mockAdapterRegistry.disabled = new Set(["codex_local"]);
+
+    const { root } = await mount();
+
+    const saved = JSON.parse(
+      window.localStorage.getItem(ONBOARDING_STORAGE_KEY) ?? "{}",
+    );
+    expect(saved.adapterType).toBe("claude_local");
+    expect(saved.modelSource).toBe("claude_local");
 
     await act(async () => {
       root.unmount();

@@ -169,6 +169,71 @@ export type DatabricksOAuthCredential = z.infer<
   typeof databricksOAuthCredentialSchema
 >;
 
+/**
+ * Starts a Databricks catalog/schema/combo discovery draft: Workspace URL +
+ * OAuth M2M Client ID/Client secret only. Catalog and schema are never
+ * requested here — they are chosen afterward from the lists this draft's
+ * `host` can discover.
+ */
+export const databricksDiscoverySessionCreateSchema = z.object({
+  workspaceHost: databricksWorkspaceHostSchema,
+  clientId: z.string().trim().min(1).max(255),
+  clientSecret: z.string().trim().min(1).max(4096),
+}).strict();
+export type DatabricksDiscoverySessionCreateInput = z.infer<
+  typeof databricksDiscoverySessionCreateSchema
+>;
+
+/** Public result of a successful discovery-session create. Never the credential or a token. */
+export interface DatabricksDiscoverySessionStarted {
+  discoverySessionId: string;
+  expiresAt: string;
+  authStatus: "authenticated";
+}
+
+/** One Unity Catalog catalog, as returned by `GET /api/2.1/unity-catalog/catalogs`. */
+export interface DatabricksCatalogOption {
+  name: string;
+  comment?: string;
+}
+
+/** One Unity Catalog schema, scoped to the catalog it was discovered under. */
+export interface DatabricksSchemaOption {
+  name: string;
+  catalog: string;
+  fullName: string;
+}
+
+/** The stage of the discovery/creation flow a failure occurred in — never a
+ * substitute for the underlying, sanitized `DatabricksDiscoveryFailure.code`. */
+export type DatabricksDiscoveryStage =
+  | "input"
+  | "oauth"
+  | "catalogs"
+  | "schemas"
+  | "model_services"
+  | "save";
+
+export const DATABRICKS_DISCOVERY_ERROR_CODES = [
+  "DATABRICKS_INVALID_INPUT",
+  "DATABRICKS_AUTH_FAILED",
+  "DATABRICKS_ACCESS_DENIED",
+  "DATABRICKS_RESOURCE_UNAVAILABLE",
+  "DATABRICKS_RATE_LIMITED",
+  "DATABRICKS_UPSTREAM_ERROR",
+  "DATABRICKS_DISCOVERY_EXPIRED",
+] as const;
+export type DatabricksDiscoveryErrorCode = (typeof DATABRICKS_DISCOVERY_ERROR_CODES)[number];
+
+/** Shape of `details` on an `HttpError` raised by any discovery-session route.
+ * Never includes a credential, an access token, or an upstream response body. */
+export interface DatabricksDiscoveryFailure {
+  code: DatabricksDiscoveryErrorCode;
+  stage: DatabricksDiscoveryStage;
+  retryable: boolean;
+  retryAfterSeconds?: number;
+}
+
 export function isAiConnectionCompatible(
   requirement: AiConnectionMetadata | AiConnectionBinding,
   adapterType: string,
@@ -254,6 +319,13 @@ export const createAiConnectionSchema = z
     // provider's payload shape stays unchanged.
     clientId: z.string().trim().min(1).max(255).optional(),
     clientSecret: z.string().trim().min(1).max(4096).optional(),
+    // The opaque draft created by the Databricks catalog/schema discovery flow
+    // (see `databricksDiscoverySessionCreateSchema`). When present, the
+    // workspace host and OAuth M2M credential are resolved server-side from the
+    // draft instead of from this request, so `workspaceHost`/`clientId`/
+    // `clientSecret` must be absent — a request can never mix a discovery
+    // draft with a directly supplied credential.
+    discoverySessionId: z.string().uuid().optional(),
   })
   .strict()
   .superRefine((v, ctx) => {
@@ -269,12 +341,21 @@ export const createAiConnectionSchema = z
           message: "Databricks connections only support the oauth_m2m sign-in method",
           path: ["method"],
         });
-      if (!v.clientId)
-        ctx.addIssue({ code: "custom", message: "Client ID is required", path: ["clientId"] });
-      if (!v.clientSecret)
-        ctx.addIssue({ code: "custom", message: "Client secret is required", path: ["clientSecret"] });
-      if (!v.workspaceHost)
-        ctx.addIssue({ code: "custom", message: "Workspace host is required", path: ["workspaceHost"] });
+      if (v.discoverySessionId) {
+        if (v.clientId || v.clientSecret || v.workspaceHost)
+          ctx.addIssue({
+            code: "custom",
+            message: "A discovery session cannot be combined with a directly supplied credential",
+            path: ["discoverySessionId"],
+          });
+      } else {
+        if (!v.clientId)
+          ctx.addIssue({ code: "custom", message: "Client ID is required", path: ["clientId"] });
+        if (!v.clientSecret)
+          ctx.addIssue({ code: "custom", message: "Client secret is required", path: ["clientSecret"] });
+        if (!v.workspaceHost)
+          ctx.addIssue({ code: "custom", message: "Workspace host is required", path: ["workspaceHost"] });
+      }
       if (!v.catalog)
         ctx.addIssue({ code: "custom", message: "Catalog is required", path: ["catalog"] });
       if (!v.schema)

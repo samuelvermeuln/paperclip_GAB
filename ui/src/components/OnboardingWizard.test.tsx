@@ -302,7 +302,12 @@ function render() {
 async function pickFirstSource(
   click: (match: (text: string) => boolean) => Promise<void>,
 ): Promise<void> {
-  const tile = [...document.body.querySelectorAll("button[aria-checked]")][0];
+  // The first *adapter* source. Databricks leads the row whenever Codex is
+  // available, but it is a connection-and-combo card rather than a sign-in,
+  // and the Databricks suite below picks it by name.
+  const tile = [...document.body.querySelectorAll("button[aria-checked]")].find(
+    (candidate) => !isDatabricksTile(candidate),
+  );
   const label = tile?.textContent?.trim() ?? "";
   await click((text) => text === label);
 }
@@ -319,6 +324,11 @@ async function pickFirstSource(
  */
 function isArcPrimary(text: string): boolean {
   return text.startsWith("Next") || text.startsWith("Connect");
+}
+
+/** The Databricks source tile, which is not an adapter from the registry. */
+function isDatabricksTile(tile: Element): boolean {
+  return (tile.textContent ?? "").startsWith("Databricks");
 }
 
 describe("OnboardingWizard restore-gate (stale localStorage across accounts)", () => {
@@ -2074,7 +2084,9 @@ describe("OnboardingWizard restore-gate (stale localStorage across accounts)", (
       const labels = [...document.body.querySelectorAll("button[aria-checked]")].map(
         (tile) => tile.textContent ?? "",
       );
-      expect(labels.length, "both recommended sources should render").toBe(2);
+      expect(labels.length, "Databricks plus both recommended sources should render").toBe(3);
+      // Databricks leads the row: it is the default model source.
+      expect(labels[0]).toContain("Databricks");
       expect(labels.some((l) => l.includes("Claude"))).toBe(true);
       expect(labels.some((l) => l.includes("OpenAI"))).toBe(true);
       // The negative half is the one that fails on the unwired version: the

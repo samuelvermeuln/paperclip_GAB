@@ -19,15 +19,18 @@ import {
   localAiConnectionSchema,
   localAiLoginStartSchema,
   isAiConnectionCompatible,
+  databricksDiscoverySessionCreateSchema,
   type AiConnectionLoginIntent,
   type AiProvider,
   type AiConnectionBinding,
+  type DatabricksDiscoveryStage,
 } from "@paperclipai/shared";
 import { assertBoard, assertCompanyAccess, getActorInfo } from "./authz.js";
-import { forbidden, notFound, unprocessable } from "../errors.js";
+import { forbidden, gone, notFound, tooManyRequests, unprocessable } from "../errors.js";
 import { accessService } from "../services/access.js";
 import { logActivity } from "../services/activity-log.js";
 import { aiConnectionService } from "../services/ai-connections.js";
+import { databricksDiscoverySessionService } from "../services/databricks-discovery-sessions.js";
 import { validate } from "../middleware/validate.js";
 import {
   validateDatabricksCredential,
@@ -241,6 +244,36 @@ async function validateDatabricksOAuthCredential(input: {
   }
 }
 
+/** Maps a `DatabricksDiscoveryError` raised anywhere in the discovery-session flow
+ * (create, catalogs, schemas, model-services) to a classified HTTP error carrying
+ * `{ code, stage, retryable }` (and `retryAfterSeconds` when Databricks sent
+ * `Retry-After`) — see doc section 6. Never lets a raw `DatabricksDiscoveryError`
+ * escape uncaught, and never surfaces a client secret, access token, or upstream
+ * response body. */
+function mapDatabricksDiscoveryError(
+  error: DatabricksDiscoveryError,
+  stage: DatabricksDiscoveryStage,
+): never {
+  if (error.kind === "invalid_host")
+    throw unprocessable(error.message, { code: "DATABRICKS_INVALID_INPUT", stage, retryable: false });
+  if (error.kind === "invalid_credential")
+    throw unprocessable(error.message, {
+      code: stage === "oauth" ? "DATABRICKS_AUTH_FAILED" : "DATABRICKS_ACCESS_DENIED",
+      stage,
+      retryable: false,
+    });
+  if (error.kind === "insufficient_permission")
+    throw unprocessable(error.message, { code: "DATABRICKS_ACCESS_DENIED", stage, retryable: false });
+  if (error.kind === "rate_limited")
+    throw tooManyRequests(error.message, {
+      code: "DATABRICKS_RATE_LIMITED",
+      stage,
+      retryable: true,
+      retryAfterSeconds: error.retryAfterSeconds,
+    });
+  throw unprocessable(error.message, { code: "DATABRICKS_UPSTREAM_ERROR", stage, retryable: true });
+}
+
 /** Options for `aiConnectionRoutes`. Extends the local-AI-login policy options with the
  * Databricks host-allowlist policy inputs (Requirement 1.4), following the same
  * injectable-options style as `supportsLocalAiLogin` rather than reading env vars directly at
@@ -257,12 +290,110 @@ export function aiConnectionRoutes(db: Db, options: AiConnectionRouteOptions = {
   const router = Router();
   const service = aiConnectionService(db);
   const localLogin = localAiLoginService(db);
+  const discoverySessions = databricksDiscoverySessionService(db);
+  /** A discovery draft needs the same authority as starting a create — an active,
+   * non-viewer company member — but never the agent-authorization or reconnect-
+   * ownership checks `assertAiConnectionCreateAccess` also does, since a draft names
+   * no agent and no existing connection yet. */
+  function assertDiscoverySessionAccess(req: Request, companyId: string): string {
+    assertBoard(req);
+    assertCompanyAccess(req, companyId);
+    const membership = req.actor.memberships?.find((m) => m.companyId === companyId && m.status === "active");
+    if (membership?.membershipRole === "viewer") throw forbidden("Viewers cannot create AI connections");
+    return getActorInfo(req).actorId;
+  }
   function assertLocalOperator(req: Request) {
     assertBoard(req);
     assertCompanyAccess(req, req.params.companyId as string);
     if (req.actor.source !== "local_implicit")
       throw forbidden("Only the local operator can connect this machine's CLI account.");
   }
+  // --- Databricks catalog/schema/combo discovery drafts -------------------
+  // Base path per doc section 4: POST creates an authenticated draft from
+  // Workspace URL + Client ID/Client secret alone; the GET endpoints below
+  // page through that draft's catalogs/schemas/combos; DELETE cancels it.
+  // None of these ever accept or return a client secret or access token.
+  router.post(
+    "/companies/:companyId/ai-connections/databricks/discovery-sessions",
+    validate(databricksDiscoverySessionCreateSchema),
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const input = databricksDiscoverySessionCreateSchema.parse(req.body);
+      const userId = assertDiscoverySessionAccess(req, companyId);
+      assertDatabricksHostAllowed(input.workspaceHost, options);
+      try {
+        res.setHeader("Cache-Control", "no-store");
+        res.status(201).json(await discoverySessions.create(companyId, userId, input));
+      } catch (error) {
+        if (error instanceof DatabricksDiscoveryError) mapDatabricksDiscoveryError(error, "oauth");
+        throw error;
+      }
+    },
+  );
+  router.get(
+    "/companies/:companyId/ai-connections/databricks/discovery-sessions/:id/catalogs",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const userId = assertDiscoverySessionAccess(req, companyId);
+      const sessionId = z.string().uuid().parse(req.params.id);
+      const refresh = req.query.refresh === "1" || req.query.refresh === "true";
+      try {
+        res.setHeader("Cache-Control", "no-store");
+        res.json({ items: await discoverySessions.listCatalogs(companyId, userId, sessionId, { refresh }) });
+      } catch (error) {
+        if (error instanceof DatabricksDiscoveryError) mapDatabricksDiscoveryError(error, "catalogs");
+        throw error;
+      }
+    },
+  );
+  router.get(
+    "/companies/:companyId/ai-connections/databricks/discovery-sessions/:id/schemas",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const userId = assertDiscoverySessionAccess(req, companyId);
+      const sessionId = z.string().uuid().parse(req.params.id);
+      const catalog = z.string().trim().min(1).max(128).parse(req.query.catalog);
+      const refresh = req.query.refresh === "1" || req.query.refresh === "true";
+      try {
+        res.setHeader("Cache-Control", "no-store");
+        res.json({ items: await discoverySessions.listSchemas(companyId, userId, sessionId, catalog, { refresh }) });
+      } catch (error) {
+        if (error instanceof DatabricksDiscoveryError) mapDatabricksDiscoveryError(error, "schemas");
+        throw error;
+      }
+    },
+  );
+  router.get(
+    "/companies/:companyId/ai-connections/databricks/discovery-sessions/:id/model-services",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const userId = assertDiscoverySessionAccess(req, companyId);
+      const sessionId = z.string().uuid().parse(req.params.id);
+      const catalog = z.string().trim().min(1).max(128).parse(req.query.catalog);
+      const schema = z.string().trim().min(1).max(128).parse(req.query.schema);
+      const modelPrefix = req.query.modelPrefix ? z.string().trim().min(1).max(128).parse(req.query.modelPrefix) : undefined;
+      const refresh = req.query.refresh === "1" || req.query.refresh === "true";
+      try {
+        res.setHeader("Cache-Control", "no-store");
+        res.json({
+          items: await discoverySessions.listModelServices(companyId, userId, sessionId, catalog, schema, modelPrefix, { refresh }),
+        });
+      } catch (error) {
+        if (error instanceof DatabricksDiscoveryError) mapDatabricksDiscoveryError(error, "model_services");
+        throw error;
+      }
+    },
+  );
+  router.delete(
+    "/companies/:companyId/ai-connections/databricks/discovery-sessions/:id",
+    async (req, res) => {
+      const companyId = req.params.companyId as string;
+      const userId = assertDiscoverySessionAccess(req, companyId);
+      const sessionId = z.string().uuid().parse(req.params.id);
+      await discoverySessions.cancel(companyId, userId, sessionId);
+      res.json({ ok: true });
+    },
+  );
   router.post("/companies/:companyId/ai-connections/local/attempts", validate(localAiLoginStartSchema), async (req, res) => {
     const companyId = req.params.companyId as string;
     const { restart, ...intent } = localAiLoginStartSchema.parse(req.body);
@@ -363,16 +494,25 @@ export function aiConnectionRoutes(db: Db, options: AiConnectionRouteOptions = {
       const attemptStartedAt = new Date();
       if (input.provider === "databricks") {
         // Databricks authenticates with OAuth M2M (Client ID / Client secret),
-        // not an api_key or the subscription sign-in flow. Enforce the SaaS host
-        // allowlist before any network call, then verify the credential live via
-        // a client-credentials token exchange against Unity Catalog. `save()`
-        // serializes the { clientId, clientSecret } pair itself for databricks,
-        // so the positional credential argument is unused on this path.
-        assertDatabricksHostAllowed(input.workspaceHost!, options);
+        // not an api_key or the subscription sign-in flow. A `discoverySessionId`
+        // resolves the already-authenticated Workspace URL / Client ID / Client
+        // secret from its discovery draft instead of trusting a fresh copy on this
+        // request — the shared schema's refinement already rejects a request that
+        // sends both. Either way, enforce the SaaS host allowlist before any
+        // network call, then verify the credential *and* the selected catalog/
+        // schema live via a client-credentials token exchange plus a single Unity
+        // Catalog page, so a stale or tampered selection can never be saved
+        // silently. `save()` serializes the { clientId, clientSecret } pair itself
+        // for databricks, so the positional credential argument is unused on this
+        // path.
+        const resolved = input.discoverySessionId
+          ? await discoverySessions.resolveForSave(companyId, userId, input.discoverySessionId)
+          : { workspaceHost: input.workspaceHost!, clientId: input.clientId!, clientSecret: input.clientSecret! };
+        assertDatabricksHostAllowed(resolved.workspaceHost, options);
         await validateDatabricksOAuthCredential({
-          clientId: input.clientId!,
-          clientSecret: input.clientSecret!,
-          workspaceHost: input.workspaceHost,
+          clientId: resolved.clientId,
+          clientSecret: resolved.clientSecret,
+          workspaceHost: resolved.workspaceHost,
           catalog: input.catalog,
           schema: input.schema,
           modelPrefix: input.modelPrefix,
@@ -380,11 +520,20 @@ export function aiConnectionRoutes(db: Db, options: AiConnectionRouteOptions = {
         const result = await service.save(
           companyId,
           userId,
-          input,
+          {
+            ...input,
+            workspaceHost: resolved.workspaceHost,
+            clientId: resolved.clientId,
+            clientSecret: resolved.clientSecret,
+          },
           "",
           undefined,
           attemptStartedAt,
         );
+        // The draft is only ever deleted after a confirmed save, so a failed
+        // save above (thrown out of `validateDatabricksOAuthCredential` or
+        // `service.save`) always leaves it intact for the user to retry.
+        if (input.discoverySessionId) await discoverySessions.complete(input.discoverySessionId);
         res.status(201).json(result);
         return;
       }

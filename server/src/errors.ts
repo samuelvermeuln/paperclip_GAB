@@ -29,6 +29,10 @@ export function conflict(message: string, details?: unknown) {
   return new HttpError(409, message, details);
 }
 
+export function gone(message: string, details?: unknown) {
+  return new HttpError(410, message, details);
+}
+
 export function payloadTooLarge(message: string, details?: unknown) {
   return new HttpError(413, message, details);
 }

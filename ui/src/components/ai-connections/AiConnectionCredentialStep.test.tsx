@@ -7,7 +7,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AiConnectionCredentialStep } from "./AiConnectionCredentialStep";
 
-const mockAiConnectionsApi = vi.hoisted(() => ({ create: vi.fn() }));
+const mockAiConnectionsApi = vi.hoisted(() => ({
+  create: vi.fn(),
+  startDatabricksDiscovery: vi.fn(),
+  cancelDatabricksDiscovery: vi.fn(),
+  databricksCatalogs: vi.fn(),
+  databricksSchemas: vi.fn(),
+  databricksModelServices: vi.fn(),
+}));
 vi.mock("@/api/ai-connections", () => ({ aiConnectionsApi: mockAiConnectionsApi }));
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -57,11 +64,9 @@ function inputForLabel(container: HTMLElement, labelText: string): HTMLInputElem
   return input;
 }
 
-function connectButton(container: HTMLElement): HTMLButtonElement {
-  const button = Array.from(container.querySelectorAll("button")).find((node) =>
-    node.textContent?.trim().startsWith("Connect"),
-  );
-  if (!button) throw new Error("No Connect button found");
+function buttonByText(root: ParentNode, text: string): HTMLButtonElement {
+  const button = Array.from(root.querySelectorAll("button")).find((node) => node.textContent?.trim().startsWith(text));
+  if (!button) throw new Error(`No button found starting with "${text}"`);
   return button;
 }
 
@@ -75,13 +80,12 @@ async function fill(container: HTMLElement, labelText: string, value: string) {
   await act(async () => setValue(inputForLabel(container, labelText), value));
 }
 
-// Every required Databricks credential field with a distinctive filler value.
+// Every required Databricks credential field with a distinctive filler value. Catalog and
+// schema are no longer typed here — Etapa A only authenticates host/client/secret.
 const REQUIRED_FIELDS: Array<[label: string, value: string]> = [
   ["Workspace URL", "https://dbc-workspace.cloud.databricks.com"],
   ["Client ID", "service-principal-id"],
   ["Client secret", SECRET],
-  ["Catalog", "main"],
-  ["Schema", "default"],
 ];
 
 async function fillAllRequired(container: HTMLElement) {
@@ -90,12 +94,49 @@ async function fillAllRequired(container: HTMLElement) {
   }
 }
 
+/** Opens the first (or second) `SearchableSelect` trigger on the page and clicks the
+ * option whose visible label matches `optionLabel`. Popover content renders through a
+ * portal into `document.body`, not into the local `container` — mirroring
+ * `SearchableSelect.test.tsx`. `triggerIndex` distinguishes Catalog (0) from Schema (1). */
+async function chooseOption(triggerIndex: number, optionLabel: string) {
+  const triggers = Array.from(document.querySelectorAll("button[role='combobox']"));
+  const trigger = triggers[triggerIndex] as HTMLButtonElement | undefined;
+  if (!trigger) throw new Error(`No combobox trigger at index ${triggerIndex}`);
+  await act(async () => trigger.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })));
+  await flushReact();
+  const item = Array.from(document.querySelectorAll("[cmdk-item]")).find((node) => node.textContent?.includes(optionLabel));
+  if (!item) throw new Error(`No option found for "${optionLabel}"`);
+  await act(async () => item.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })));
+  await flushReact();
+}
+
+function defaultDiscoveryMocks() {
+  mockAiConnectionsApi.startDatabricksDiscovery.mockResolvedValue({
+    discoverySessionId: "draft-1",
+    expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+    authStatus: "authenticated",
+  });
+  mockAiConnectionsApi.databricksCatalogs.mockResolvedValue({ items: [{ name: "main" }, { name: "system" }] });
+  mockAiConnectionsApi.databricksSchemas.mockResolvedValue({ items: [{ name: "paperclip", catalog: "main", fullName: "main.paperclip" }] });
+  mockAiConnectionsApi.databricksModelServices.mockResolvedValue({ items: [{ id: "main.paperclip.combo_ux", label: "Combo Ux" }] });
+  mockAiConnectionsApi.cancelDatabricksDiscovery.mockResolvedValue({ ok: true });
+}
+
 describe("AiConnectionCredentialStep — Databricks step", () => {
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot> | null;
   let queryClient: QueryClient;
+  let originalResizeObserver: typeof ResizeObserver | undefined;
 
   beforeEach(() => {
+    // `SearchableSelect` (Catalog/Schema) renders through `cmdk`, which requires
+    // `ResizeObserver` — absent in jsdom. Same stub as `SearchableSelect.test.tsx`.
+    originalResizeObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    };
     container = document.createElement("div");
     document.body.appendChild(container);
     root = null;
@@ -110,6 +151,7 @@ describe("AiConnectionCredentialStep — Databricks step", () => {
       });
     }
     queryClient.clear();
+    globalThis.ResizeObserver = originalResizeObserver!;
     container.remove();
     document.body.innerHTML = "";
     vi.clearAllMocks();
@@ -126,105 +168,153 @@ describe("AiConnectionCredentialStep — Databricks step", () => {
     return props;
   }
 
-  it("blocks Connect until Workspace URL, Client ID, Client secret, Catalog, and Schema are filled", async () => {
+  it("blocks Connect until Workspace URL, Client ID, and Client secret are filled", async () => {
     render();
     await flushReact();
 
     // Name arrives pre-filled from the wizard, but the credential fields do not.
-    expect(connectButton(container).disabled).toBe(true);
+    const connect = () => buttonByText(container, "Connect and find options");
+    expect(connect().disabled).toBe(true);
 
-    // Each required field on its own leaves the submit blocked...
     for (const [label, value] of REQUIRED_FIELDS.slice(0, -1)) {
       await fill(container, label, value);
-      expect(connectButton(container).disabled).toBe(true);
+      expect(connect().disabled).toBe(true);
     }
 
-    // ...only once the final required field is filled does Connect enable.
     const [lastLabel, lastValue] = REQUIRED_FIELDS[REQUIRED_FIELDS.length - 1];
     await fill(container, lastLabel, lastValue);
-    expect(connectButton(container).disabled).toBe(false);
+    expect(connect().disabled).toBe(false);
 
-    // Prefix is optional and never gates submission.
-    await fill(container, "Prefix", "combo-");
-    expect(connectButton(container).disabled).toBe(false);
-
-    expect(mockAiConnectionsApi.create).not.toHaveBeenCalled();
+    expect(mockAiConnectionsApi.startDatabricksDiscovery).not.toHaveBeenCalled();
   });
 
   it("keeps Connect blocked when a required field is only whitespace", async () => {
     render();
     await flushReact();
     await fillAllRequired(container);
-    expect(connectButton(container).disabled).toBe(false);
+    expect(buttonByText(container, "Connect and find options").disabled).toBe(false);
 
-    await fill(container, "Catalog", "   ");
-    expect(connectButton(container).disabled).toBe(true);
+    await fill(container, "Workspace URL", "   ");
+    expect(buttonByText(container, "Connect and find options").disabled).toBe(true);
   });
 
-  it("shows the server error when connection creation fails", async () => {
-    mockAiConnectionsApi.create.mockRejectedValue(new Error("Databricks rejected the credentials"));
+  it("shows the server error and clears the secret when the connect call fails, without moving to Etapa B", async () => {
+    mockAiConnectionsApi.startDatabricksDiscovery.mockRejectedValue(new Error("Databricks rejected the credentials"));
     render();
     await flushReact();
     await fillAllRequired(container);
 
-    await act(async () => connectButton(container).click());
+    await act(async () => buttonByText(container, "Connect and find options").click());
     await flushReact();
 
     await vi.waitFor(() => {
       const alert = container.querySelector('[role="alert"]');
       expect(alert?.textContent).toContain("Databricks rejected the credentials");
     });
+    // Etapa A is still shown (Client secret input still exists) and it is empty again.
+    expect(inputForLabel(container, "Client secret").value).toBe("");
+    expect(container.innerHTML).not.toContain(SECRET);
+    expect(document.body.textContent ?? "").not.toContain(SECRET);
   });
 
-  it("clears the client secret and never renders it back after a successful submit", async () => {
+  it("moves to Etapa B on a successful connect, clearing the secret and never rendering it again", async () => {
+    defaultDiscoveryMocks();
+    render();
+    await flushReact();
+    await fillAllRequired(container);
+
+    await act(async () => buttonByText(container, "Connect and find options").click());
+    await flushReact();
+
+    expect(mockAiConnectionsApi.startDatabricksDiscovery).toHaveBeenCalledWith("company-1", {
+      workspaceHost: "https://dbc-workspace.cloud.databricks.com",
+      clientId: "service-principal-id",
+      clientSecret: SECRET,
+    });
+    await vi.waitFor(() => expect(container.textContent).toContain("Authenticated"));
+    // Etapa A's Client secret input is gone entirely — it cannot re-render the secret.
+    expect(() => inputForLabel(container, "Client secret")).toThrow();
+    expect(container.innerHTML).not.toContain(SECRET);
+    expect(document.body.textContent ?? "").not.toContain(SECRET);
+  });
+
+  it("shows the empty-catalogs message when the authenticated draft has no accessible catalog", async () => {
+    defaultDiscoveryMocks();
+    mockAiConnectionsApi.databricksCatalogs.mockResolvedValue({ items: [] });
+    render();
+    await flushReact();
+    await fillAllRequired(container);
+    await act(async () => buttonByText(container, "Connect and find options").click());
+    await flushReact();
+
+    await vi.waitFor(() => expect(container.textContent).toContain("Authenticated"));
+    await act(async () => {
+      const trigger = container.querySelector("button[role='combobox']") as HTMLButtonElement;
+      trigger.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    });
+    await flushReact();
+    expect(document.body.textContent).toContain(
+      "Connection authenticated. No accessible catalog was returned for this service principal.",
+    );
+  });
+
+  it("selects a catalog then a schema and saves via discoverySessionId, never resending the credential", async () => {
+    defaultDiscoveryMocks();
     mockAiConnectionsApi.create.mockResolvedValue({ connectionId: "conn-1", grantId: "grant-1" });
     const onComplete = vi.fn();
     render({ onComplete });
     await flushReact();
     await fillAllRequired(container);
+    await act(async () => buttonByText(container, "Connect and find options").click());
+    await flushReact();
+    await vi.waitFor(() => expect(container.textContent).toContain("Authenticated"));
 
-    await act(async () => connectButton(container).click());
+    await chooseOption(0, "main");
+    await vi.waitFor(() => expect(mockAiConnectionsApi.databricksSchemas).toHaveBeenCalledWith("company-1", "draft-1", "main"));
+
+    await chooseOption(1, "paperclip");
+    await vi.waitFor(() => expect(container.textContent).toContain("combo found"));
+
+    const save = () => buttonByText(container, "Save");
+    await vi.waitFor(() => expect(save().disabled).toBe(false));
+    await act(async () => save().click());
     await flushReact();
 
-    // The secret is handed only to the injected create action, never re-derived.
     expect(mockAiConnectionsApi.create).toHaveBeenCalledWith(
       "company-1",
-      expect.objectContaining({ provider: "databricks", method: "oauth_m2m", clientSecret: SECRET }),
+      expect.objectContaining({
+        provider: "databricks",
+        method: "oauth_m2m",
+        discoverySessionId: "draft-1",
+        catalog: "main",
+        schema: "paperclip",
+      }),
     );
-    await vi.waitFor(() => expect(onComplete).toHaveBeenCalledWith(
-      expect.objectContaining({ connectionId: "conn-1", grantId: "grant-1", method: "oauth_m2m" }),
-    ));
-
-    // After the submit settles, the write-only secret field is empty again...
-    await vi.waitFor(() => expect(inputForLabel(container, "Client secret").value).toBe(""));
-    // ...and the secret value does not appear in any rendered input or text.
-    for (const input of container.querySelectorAll("input")) {
-      expect(input.value).not.toContain(SECRET);
-    }
-    expect(container.innerHTML).not.toContain(SECRET);
-    expect(document.body.textContent ?? "").not.toContain(SECRET);
+    const savedInput = mockAiConnectionsApi.create.mock.calls[0]![1];
+    expect(savedInput).not.toHaveProperty("clientId");
+    expect(savedInput).not.toHaveProperty("clientSecret");
+    expect(savedInput).not.toHaveProperty("workspaceHost");
+    await vi.waitFor(() =>
+      expect(onComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ connectionId: "conn-1", grantId: "grant-1", method: "oauth_m2m" }),
+      ),
+    );
   });
 
-  it("clears the client secret and never renders it back after a failed submit", async () => {
-    mockAiConnectionsApi.create.mockRejectedValue(new Error("Databricks rejected the credentials"));
-    render();
+  it("cancels the draft and returns control to the caller", async () => {
+    defaultDiscoveryMocks();
+    const onCancel = vi.fn();
+    render({ onCancel });
     await flushReact();
     await fillAllRequired(container);
+    await act(async () => buttonByText(container, "Connect and find options").click());
+    await flushReact();
+    await vi.waitFor(() => expect(container.textContent).toContain("Authenticated"));
 
-    await act(async () => connectButton(container).click());
+    await act(async () => buttonByText(container, "Cancel").click());
     await flushReact();
 
-    // The failed submit surfaces the error but still wipes the secret from the UI.
-    await vi.waitFor(() => {
-      expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-        "Databricks rejected the credentials",
-      );
-      expect(inputForLabel(container, "Client secret").value).toBe("");
-    });
-    for (const input of container.querySelectorAll("input")) {
-      expect(input.value).not.toContain(SECRET);
-    }
-    expect(container.innerHTML).not.toContain(SECRET);
-    expect(document.body.textContent ?? "").not.toContain(SECRET);
+    expect(mockAiConnectionsApi.cancelDatabricksDiscovery).toHaveBeenCalledWith("company-1", "draft-1");
+    expect(onCancel).toHaveBeenCalled();
   });
 });

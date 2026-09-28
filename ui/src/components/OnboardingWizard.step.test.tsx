@@ -582,7 +582,11 @@ describe("OnboardingWizard — which step it lands on", () => {
      * the tiles carry whatever it happens to return.
      */
     async function pickModelSource() {
-      const tiles = [...document.body.querySelectorAll("button[aria-checked]")];
+      // The first adapter source. Databricks leads the row but asks for a
+      // connection and a combo, which this suite about steps has no stake in.
+      const tiles = [...document.body.querySelectorAll("button[aria-checked]")].filter(
+        (tile) => !(tile.textContent ?? "").startsWith("Databricks"),
+      );
       expect(tiles.length, "the connect step should offer a source").toBeGreaterThan(0);
       await press(tiles[0]!);
     }

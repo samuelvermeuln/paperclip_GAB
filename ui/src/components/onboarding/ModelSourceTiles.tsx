@@ -27,6 +27,12 @@ export type ModelSource = {
   label: string;
   /** The brand mark, rendered into a 30px square. */
   icon: ReactNode;
+  /**
+   * A fixed credential tag for a source that is not reached through the
+   * row's subscription/API mode — Databricks signs in with a service
+   * principal whichever mode the other tiles are in.
+   */
+  tag?: string;
 };
 
 const CREDENTIAL_TAG_LABEL: Record<CredentialMode, string> = {
@@ -123,7 +129,15 @@ function ModelSourceTile({
       <span className="text-(length:--text-compact) font-medium text-foreground">
         {source.label}
       </span>
-      <CredentialTag mode={mode} />
+      {source.tag ? (
+        // Same fixed-height slot as the swapping tag, so a row mixing both
+        // keeps every tile the same height.
+        <span className="flex h-4 w-full items-center justify-center overflow-hidden whitespace-nowrap text-(length:--text-micro) text-muted-foreground">
+          {source.tag}
+        </span>
+      ) : (
+        <CredentialTag mode={mode} />
+      )}
     </button>
   );
 }

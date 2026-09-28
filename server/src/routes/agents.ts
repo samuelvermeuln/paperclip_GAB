@@ -5,7 +5,7 @@ import { ADAPTER_AUTH_MISSING_CHECK_CODE, AI_CONNECTION_CAPABILITIES, aiConnecti
 import { toolConnections } from "@paperclipai/db";
 import { aiConnectionService } from "../services/ai-connections.js";
 import { DatabricksDiscoveryError } from "../services/databricks-model-services.js";
-import { defaultAiConnectionForHire } from "../services/agent-ai-connection-default.js";
+import { defaultAiConnectionForHire, inheritedDatabricksComboModel } from "../services/agent-ai-connection-default.js";
 import { assertAiConnectionCreateAccess, canInstallSharedAiConnectionForNewAgent, responsibleUserForAiRequest, validateAiApiKey } from "./ai-connections.js";
 import { isAiConnectionCompatible } from "@paperclipai/shared";
 import { applyConnectorSkills, resolveConnectorAssignments, annotateConnectorSkills, isConnectorSkill } from "../services/connector-runtime.js";
@@ -2448,6 +2448,18 @@ export function agentRoutes(
     if (!manager || manager.companyId !== companyId) throw forbidden("Hiring agent is unavailable");
     const binding = defaultAiConnectionForHire(adapterType, adapterConfig, manager.runtimeConfig?.aiConnection);
     if (binding) normalized.aiConnection = binding;
+    // A Databricks child with no model of its own runs its manager's combo.
+    // Both callers pass the freshly normalized adapter config they persist, so
+    // filling the model here is what the created agent is stored with.
+    const inheritedCombo = inheritedDatabricksComboModel({
+      adapterType,
+      config: adapterConfig,
+      binding,
+      managerAdapterType: manager.adapterType,
+      managerConfig: asRecord(manager.adapterConfig),
+      managerBinding: manager.runtimeConfig?.aiConnection,
+    });
+    if (inheritedCombo) adapterConfig.model = inheritedCombo;
     return normalized;
   }
 
@@ -3393,19 +3405,22 @@ export function agentRoutes(
     // requirement stays for subscriptions: a stored login is a file layout
     // only a provider CLI reads, so proving the runtime lane can consume it
     // takes a real hello turn.
-    // Databricks only supports the api_key method (enforced by
-    // databricksConnectionConfigSchema/AI_CONNECTION_CAPABILITIES), so it would
-    // otherwise always land in the `resolvedMethod === "api_key"` branch below.
-    // It is guarded out here instead, before that branch, because
-    // `validateAiApiKey` has no Databricks entry in its provider-endpoint map
-    // (that path is OpenAI-oriented — see `validateAiApiKey`) and Databricks
-    // connectivity is verified separately via the Unity Gateway
-    // (`/ai-gateway/codex/v1`, task 8). Testing it here would double-test what
-    // the connectivity path already owns and could produce a confusing/incorrect
-    // result since there is no OpenAI-style hello-probe adapter for Databricks.
+    // Databricks authenticates with OAuth M2M (enforced by
+    // AI_CONNECTION_CAPABILITIES), which neither the api_key re-verification
+    // nor the CLI hello probe below understands: `validateAiApiKey` has no
+    // Databricks endpoint and there is no OpenAI-style hello-probe adapter for
+    // it. Databricks connectivity is verified by the adapter test itself via
+    // the Unity Gateway (`/ai-gateway/codex/v1`), so it is handled here, before
+    // those branches.
     if (binding.provider === "databricks") {
-      result.status = "fail";
-      result.checks.push({ code: "ai_connection_validation_incomplete", level: "error", message: "The selected account has not completed a provider hello test. Retry before adopting it." });
+      // The codex_local test already replaced the hello probe with a live
+      // Unity Gateway connectivity check minted through the OAuth M2M helper.
+      // That check is the Databricks equivalent of a passed hello probe, so
+      // adoption requires it — and nothing else — rather than failing always.
+      if (!result.checks.some((check) => check.code === "databricks_connectivity_passed")) {
+        result.status = "fail";
+        result.checks.push({ code: "ai_connection_validation_incomplete", level: "error", message: "The Databricks Unity Gateway connectivity check did not pass. Retry before adopting this connection." });
+      }
       return result;
     }
     if (resolvedMethod === "api_key") {

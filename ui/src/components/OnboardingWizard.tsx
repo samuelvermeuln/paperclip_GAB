@@ -3,7 +3,7 @@ import { LocalProviderLoginInstructions } from "./AdapterLoginChrome";
 import { useLocalAiLogin } from "./ai-connections/useLocalAiLogin";
 import { aiConnectionsApi } from "@/api/ai-connections";
 import { aiProviderForAdapter } from "./ai-connections/AiConnectionField";
-import type { AiConnectionBinding } from "@paperclipai/shared";
+import type { AiConnectionBinding, AiManagedConnectionSummary } from "@paperclipai/shared";
 import { storeProviderApiKey } from "../lib/provider-credential";
 import { SavedProviderKeySelect, useSavedProviderKeys } from "./onboarding/SavedProviderKeySelect";
 import { randomAgentAppearance, resolveAgentAppearance, agentAppearanceSchema } from "@paperclipai/shared";
@@ -128,6 +128,13 @@ import {
 } from "./onboarding/Stepper";
 import { AgentPreview } from "./onboarding/AgentPreview";
 import { ModelSourceTiles, type CredentialMode } from "./onboarding/ModelSourceTiles";
+import {
+  DATABRICKS_SOURCE_ADAPTER_TYPE,
+  DATABRICKS_SOURCE_ID,
+  DatabricksSourceCard,
+  aiConnectionsQueryKey,
+  databricksBindingFor,
+} from "./onboarding/DatabricksSourceCard";
 import { CredentialModeLink } from "./onboarding/CredentialModeLink";
 import { FooterNav, type FooterPrimaryIcon } from "./onboarding/FooterNav";
 import { OnboardingHeading } from "./onboarding/OnboardingPrimitives";
@@ -156,10 +163,30 @@ const ONBOARDING_EXCLUDED_ADAPTER_TYPES = new Set([
   "paperclip_runner",
 ]);
 
+/**
+ * The adapter a fresh wizard hires with. Databricks Unity Gateway is this
+ * deployment's default model source, and it runs on the Codex harness.
+ */
+const DEFAULT_ONBOARDING_ADAPTER_TYPE: AdapterType = DATABRICKS_SOURCE_ADAPTER_TYPE;
+
 function restoreOnboardingAdapterType(savedAdapterType: unknown): AdapterType {
   return typeof savedAdapterType === "string" && savedAdapterType !== "paperclip_runner"
     ? savedAdapterType
-    : "claude_local";
+    : DEFAULT_ONBOARDING_ADAPTER_TYPE;
+}
+
+/**
+ * Whether the draft's model source is Databricks rather than the adapter's own
+ * provider.
+ *
+ * A draft that records its source says so. A draft from before the Databricks
+ * source existed names only an adapter, and that was a choice of the adapter's
+ * own provider — so it restores as that, not as Databricks. A fresh wizard, or
+ * a runner draft being normalized onto the default, starts on Databricks.
+ */
+function restoreOnboardingDatabricksSource(saved: Record<string, unknown> | null | undefined): boolean {
+  if (typeof saved?.modelSource === "string") return saved.modelSource === DATABRICKS_SOURCE_ID;
+  return typeof saved?.adapterType !== "string" || saved.adapterType === "paperclip_runner";
 }
 
 /**
@@ -239,6 +266,20 @@ function OpenAiBlossom({ className }: { className?: string }) {
 const MODEL_SOURCE_INLINE_MARKS: Record<string, ComponentType<{ className?: string }>> = {
   codex_local: OpenAiBlossom,
 };
+
+/**
+ * Databricks' stacked-layers mark, inline like the OpenAI one. Its brand red
+ * reads on both the light and the dark tile, so it keeps its own colour.
+ */
+function DatabricksMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 32 32" className={className} aria-hidden>
+      <path fill="#FF3621" d="M16 2 29 9 16 16 3 9Z" />
+      <path fill="#FF3621" d="M3 13 16 20 29 13v3.5L16 23.5 3 16.5Z" />
+      <path fill="#FF3621" d="M3 20.5 16 27.5 29 20.5V24L16 31 3 24Z" />
+    </svg>
+  );
+}
 
 /**
  * The environment variable each source reads its key from.
@@ -619,6 +660,22 @@ function OnboardingWizardInner({
    * whether the row has been *answered* on this visit.
    */
   const [sourcePicked, setSourcePicked] = useState(false);
+  /**
+   * Whether the model source is Databricks Unity Gateway.
+   *
+   * Databricks is not an adapter: it is an AI connection provider that runs on
+   * the Codex harness. So `adapterType` holds `codex_local` for it, and this is
+   * what tells that apart from the OpenAI tile, which holds the same adapter.
+   */
+  const [databricksSource, setDatabricksSource] = useState(() =>
+    restoreOnboardingDatabricksSource(saved),
+  );
+  /**
+   * The Databricks connection the hire is bound to. Not in the draft: it is a
+   * server record that the card re-selects on its own when the step reopens.
+   */
+  const [databricksConnection, setDatabricksConnection] =
+    useState<AiManagedConnectionSummary | null>(null);
   const savedNativeRunnerDraft = saved?.adapterType === "paperclip_runner";
   const [cwd, setCwd] = useState((saved?.cwd as string) ?? "");
   // Native drafts may carry provider-specific configuration that is invalid
@@ -763,6 +820,9 @@ function OnboardingWizardInner({
   const managedSubscriptionRef = useRef<{ companyId: string; binding: AiConnectionBinding } | null>(null);
   const managedProvider = aiProviderForAdapter(adapterType);
   function managedBindingForStep(): AiConnectionBinding | undefined {
+    // Databricks is always a managed connection, whatever the row's
+    // subscription/API mode says: that mode describes the other tiles.
+    if (databricksSource) return databricksConnection ? databricksBindingFor(databricksConnection) : undefined;
     if (credentialMode === "api") return selectedApiKey?.aiConnection ?? (
       !selectedApiKey && apiKeySecretRef.current?.companyId === createdCompanyId && apiKeySecretRef.current.envKey === apiKeyEnvKeyFor(adapterType)
         ? apiKeySecretRef.current.aiConnection : undefined);
@@ -904,6 +964,7 @@ function OnboardingWizardInner({
     const state = {
       step, companyName,
       agentName, agentAppearance, agentRole, adapterType, cwd, model, command, args, url,
+      modelSource: databricksSource ? DATABRICKS_SOURCE_ID : adapterType,
       // The mode, never the key: this blob is localStorage.
       credentialMode, credentialModeChoice,
       createdCompanyId, createdCompanyPrefix, createdAgentId,
@@ -913,6 +974,7 @@ function OnboardingWizardInner({
   }, [
     effectiveOnboardingOpen, step, companyName,
     agentName, agentAppearance, agentRole, adapterType, cwd, model, command, args, url,
+    databricksSource,
     credentialMode, credentialModeChoice,
     createdCompanyId, createdCompanyPrefix, createdAgentId,
     createdCompanyGoalId, createdProjectId, createdIssueRef,
@@ -1019,7 +1081,7 @@ function OnboardingWizardInner({
     provider: managedProvider ?? "anthropic", method: "subscription",
     name: `My ${CONNECT_SOURCE_NAMES[adapterType] ?? managedProvider} subscription`,
     ownership: "personal", agentIds: [], allAgents: true,
-  }, effectiveOnboardingOpen && step === 4 && canUseLocalLogin && credentialMode !== "api" &&
+  }, effectiveOnboardingOpen && step === 4 && !databricksSource && canUseLocalLogin && credentialMode !== "api" &&
     Boolean(managedProvider) && !savedSubscription && !savedKeys.storedLogin.data && !managedBindingForStep(),
   { allowHostClaude: localLoginHealth.data?.deploymentMode === "local_trusted" });
   // A result from a previous selection must not hire or advance this wizard.
@@ -1033,7 +1095,7 @@ function OnboardingWizardInner({
       setAdapterEnvLoading(false);
     }
     return () => { connectAttemptRef.current++; };
-  }, [effectiveOnboardingOpen, createdCompanyId, adapterType, credentialMode, step]);
+  }, [effectiveOnboardingOpen, createdCompanyId, adapterType, databricksSource, credentialMode, step]);
 
   const canShowAdapterLogin = Boolean(
     adapterCaps.login != null &&
@@ -1153,8 +1215,25 @@ function OnboardingWizardInner({
    * `adapterType` alone, because a restored draft can name an adapter this step
    * no longer offers — a selection the customer cannot see.
    */
+  /**
+   * Whether the Databricks tile can be offered: it runs on the Codex harness,
+   * so it goes wherever that harness is available and not disabled.
+   */
+  const databricksAvailable = [...recommendedAdapters, ...moreAdapters].some(
+    (opt) => opt.type === DATABRICKS_SOURCE_ADAPTER_TYPE && !opt.comingSoon,
+  );
   const sourceSelected =
-    sourcePicked && recommendedAdapters.some((opt) => opt.type === adapterType);
+    sourcePicked &&
+    (databricksSource
+      ? databricksAvailable && adapterType === DATABRICKS_SOURCE_ADAPTER_TYPE
+      : recommendedAdapters.some((opt) => opt.type === adapterType));
+  /**
+   * Whether the Databricks card has answered both of its questions: which
+   * connection, and which combo. The combo is not optional the way other
+   * sources' models are — Codex's own default model is not one the gateway
+   * serves, so a hire without a combo could never run.
+   */
+  const databricksReady = Boolean(databricksConnection && model.trim());
 
   /**
    * Whether the connect step may advance.
@@ -1173,7 +1252,10 @@ function OnboardingWizardInner({
    * Anything that gates this step belongs in here, so the next one is added
    * once rather than twice.
    */
-  const connectStepReady = sourceSelected && !adapterEnvLoading && !savedKeys.loading;
+  const connectStepReady =
+    sourceSelected &&
+    !adapterEnvLoading &&
+    (databricksSource ? databricksReady : !savedKeys.loading);
 
   /**
    * Whether this step has a sign-in to do before it can hire.
@@ -1184,6 +1266,9 @@ function OnboardingWizardInner({
    * sandbox, or a local CLI account — Connect verifies credentials before the hire.
    */
   const connectStepNeedsLogin = Boolean(
+    // Databricks signs in with a service principal on its own card; there is
+    // no browser login for it to run.
+    !databricksSource &&
     credentialMode !== "api" &&
       // Connection-list invalidation can arrive before the login's completion
       // poll. Keep its controller mounted until it reports success; otherwise
@@ -1213,7 +1298,7 @@ function OnboardingWizardInner({
 
   /** Without browser login, show instructions for the selected execution environment. */
   const connectStepHasNoSandbox =
-    credentialMode !== "api" && !canShowAdapterLogin && !authSignalUndecided;
+    !databricksSource && credentialMode !== "api" && !canShowAdapterLogin && !authSignalUndecided;
 
   /*
     The sequence's derived state. Space and visibility are separate throughout:
@@ -1224,9 +1309,9 @@ function OnboardingWizardInner({
   const connectCollapsed =
     connectPhase !== "idle" && connectPhase !== "unwindRow" && sourceSelected;
   const connectProgress = adapterEnvLoading ? "Testing connection…" : loading ? "Connecting…" : null;
-  const hasSavedSubscription = Boolean(savedSubscription || savedKeys.storedLogin.data ||
+  const hasSavedSubscription = !databricksSource && Boolean(savedSubscription || savedKeys.storedLogin.data ||
     (credentialMode !== "api" && managedBindingForStep()));
-  const connectHasCard = credentialMode === "api" || connectStepNeedsLogin || connectStepHasNoSandbox || Boolean(connectProgress);
+  const connectHasCard = databricksSource || credentialMode === "api" || connectStepNeedsLogin || connectStepHasNoSandbox || Boolean(connectProgress);
   const connectCardLive =
     connectHasCard &&
     (connectPhase === "loading" ||
@@ -1278,7 +1363,9 @@ function OnboardingWizardInner({
   // chosen Claude or Codex. A saved-list refresh during that work is not a new
   // attempt, and a failed attempt waits for an explicit Connect retry.
   useEffect(() => {
-    if (!effectiveOnboardingOpen || step !== 4 || connectPhase !== "ready" ||
+    // Never for Databricks: its connection and combo are choices on the card,
+    // and the hire waits for the customer to press Connect on them.
+    if (!effectiveOnboardingOpen || step !== 4 || connectPhase !== "ready" || databricksSource ||
         !connectStepReady || connectStepNeedsLogin || connectCredentialStored ||
         credentialMode !== "subscription" ||
         (adapterType !== "claude_local" && adapterType !== "codex_local") ||
@@ -1286,7 +1373,7 @@ function OnboardingWizardInner({
         loading || autoConnectStartedRef.current) return;
     autoConnectStartedRef.current = true;
     void handleGiveHeartbeat();
-  }, [effectiveOnboardingOpen, step, connectPhase, connectStepReady, connectStepNeedsLogin,
+  }, [effectiveOnboardingOpen, step, connectPhase, databricksSource, connectStepReady, connectStepNeedsLogin,
     connectCredentialStored, credentialMode, adapterType, hasSavedSubscription, localLogin.status, loading]);
 
   /**
@@ -1384,7 +1471,8 @@ function OnboardingWizardInner({
                 label: "Connect",
                 icon: "arrow",
                 disabled:
-                  !connectStepReady || (credentialMode === "api" && !apiKey.trim() && !selectedApiKey),
+                  !connectStepReady ||
+                  (!databricksSource && credentialMode === "api" && !apiKey.trim() && !selectedApiKey),
               }
           : // Nothing is chosen on arrival, and the row is what chooses. Until
             // it has been answered the button has nothing to do.
@@ -1470,7 +1558,7 @@ function OnboardingWizardInner({
    */
   const canvasOpen =
     sourceSelected &&
-    (credentialMode === "api" || connectCardSpace || connectStepHasNoSandbox);
+    (databricksSource || credentialMode === "api" || connectCardSpace || connectStepHasNoSandbox);
 
   // The default (or a saved) adapterType can name an adapter the server has
   // since disabled — e.g. a cloud sandbox registry without claude_local. The
@@ -1496,6 +1584,12 @@ function OnboardingWizardInner({
     // preselection this step was changed to stop doing. The saved answer was
     // unofferable, so the question is open again.
     setSourcePicked(false);
+    // Databricks runs on the Codex harness; a snap away from it leaves the
+    // Databricks source with nothing to run on.
+    if (next !== DATABRICKS_SOURCE_ADAPTER_TYPE) {
+      setDatabricksSource(false);
+      setDatabricksConnection(null);
+    }
     if (next === "codex_local") return;
     if (next === "opencode_local") {
       setModel(DEFAULT_OPENCODE_LOCAL_MODEL);
@@ -1540,7 +1634,7 @@ function OnboardingWizardInner({
     setAdapterEnvResult(null);
     adapterEnvResultAppliedStoredLoginRef.current = false;
     setAdapterEnvError(null);
-  }, [step, adapterType, model, command, args, url, credentialMode, apiKey, selectedSavedKey, selectedApiKey?.id, savedSubscription?.id]);
+  }, [step, adapterType, databricksSource, databricksConnection?.id, model, command, args, url, credentialMode, apiKey, selectedSavedKey, selectedApiKey?.id, savedSubscription?.id]);
 
   /**
    * Leaving the step puts the row back to a question.
@@ -1626,7 +1720,9 @@ function OnboardingWizardInner({
     setAgentName("");
     setAgentAppearance(randomAgentAppearance());
     setAgentRole(DEFAULT_AGENT_ROLE);
-    setAdapterType("claude_local");
+    setAdapterType(DEFAULT_ONBOARDING_ADAPTER_TYPE);
+    setDatabricksSource(true);
+    setDatabricksConnection(null);
     setModel("");
     setCommand("");
     setArgs("");
@@ -1867,7 +1963,7 @@ function OnboardingWizardInner({
     // present. If storing failed this stays false, and the right outcome is a
     // configuration with no credential — which the hire then blocks on — rather
     // than one that quietly falls back to embedding the value.
-    if (!managedBindingForStep() && credentialMode === "api" && (bindApiKey || selectedApiKey)) {
+    if (!databricksSource && !managedBindingForStep() && credentialMode === "api" && (bindApiKey || selectedApiKey)) {
       const env =
         typeof config.env === "object" && config.env !== null && !Array.isArray(config.env)
           ? { ...(config.env as Record<string, unknown>) }
@@ -1875,7 +1971,9 @@ function OnboardingWizardInner({
       env[apiKeyEnvKeyFor(adapterType)] = selectedApiKey?.binding ?? apiKeySecretRef.current?.binding;
       config.env = env;
     }
-    if (credentialMode === "subscription" && savedSubscription?.binding) {
+    // Not for Databricks: an OpenAI subscription's CODEX_HOME would be an
+    // unrelated credential riding along on a Databricks-bound agent.
+    if (!databricksSource && credentialMode === "subscription" && savedSubscription?.binding) {
       config.env = { ...((config.env as object) ?? {}), CODEX_HOME: savedSubscription.binding };
     }
     return config;
@@ -2021,7 +2119,7 @@ function OnboardingWizardInner({
     // guard at the mutation boundary so a stale or modified client cannot use
     // first-run onboarding to create a native agent.
     if (adapterType === "paperclip_runner") {
-      setAdapterType("claude_local");
+      setAdapterType(DEFAULT_ONBOARDING_ADAPTER_TYPE);
       setModel("");
       setError("Paperclip Runner is not available during onboarding. Choose a legacy adapter.");
       return;
@@ -2089,11 +2187,27 @@ function OnboardingWizardInner({
       // hire describe it the same way — as a reference. A failure here stops the
       // hire rather than falling through to a configuration with no credential.
       let apiKeyStored = false;
-      if (credentialMode === "api" && !selectedApiKey && apiKey.trim()) {
+      if (databricksSource) {
+        // Both answers are on the card, and the hire cannot run without them.
+        if (!databricksConnection || !model.trim()) {
+          setError("Choose a Databricks connection and a combo before connecting.");
+          return;
+        }
+        // A personal connection binds through the owner's provider default
+        // (`responsible_user`), so it has to *be* that default. The first
+        // personal Databricks connection already is; any later one is not
+        // until chosen, and a hire against the old default would run there.
+        if (databricksConnection.ownership === "personal" && !databricksConnection.isDefault) {
+          await aiConnectionsApi.setDefault(createdCompanyId, databricksConnection.grantId);
+          if (!isCurrent()) return;
+          void queryClient.invalidateQueries({ queryKey: aiConnectionsQueryKey(createdCompanyId) });
+        }
+      }
+      if (!databricksSource && credentialMode === "api" && !selectedApiKey && apiKey.trim()) {
         apiKeyStored = await storeApiKeyUserSecret(createdCompanyId);
         if (!apiKeyStored || !isCurrent()) return;
       }
-      if (credentialMode !== "api" && canUseLocalLogin && managedProvider && !managedBindingForStep() && !savedSubscription && !savedKeys.storedLogin.data) {
+      if (!databricksSource && credentialMode !== "api" && canUseLocalLogin && managedProvider && !managedBindingForStep() && !savedSubscription && !savedKeys.storedLogin.data) {
         await localLogin.connect();
         if (!isCurrent()) return;
         managedSubscriptionRef.current = { companyId: createdCompanyId, binding: { provider: managedProvider, method: "subscription", mode: "responsible_user" } };
@@ -2672,17 +2786,31 @@ function OnboardingWizardInner({
                         question, and answering it is what opens the card. */}
                     <ModelSourceTiles
                       label="Model source"
-                      sources={recommendedAdapters.map((opt) => ({
-                        id: opt.type,
-                        label: CONNECT_SOURCE_NAMES[opt.type] ?? opt.label,
-                        icon: <ModelSourceMark type={opt.type} Fallback={opt.icon} />,
-                      }))}
+                      sources={[
+                        // Databricks leads the row: it is this deployment's
+                        // default model source. It is not an adapter, so it is
+                        // listed here rather than coming from the registry.
+                        ...(databricksAvailable
+                          ? [{
+                              id: DATABRICKS_SOURCE_ID,
+                              label: "Databricks",
+                              icon: <DatabricksMark className="size-full" />,
+                              tag: "Service principal",
+                            }]
+                          : []),
+                        ...recommendedAdapters.map((opt) => ({
+                          id: opt.type,
+                          label: CONNECT_SOURCE_NAMES[opt.type] ?? opt.label,
+                          icon: <ModelSourceMark type={opt.type} Fallback={opt.icon} />,
+                        })),
+                      ]}
                       mode={credentialMode}
                       selectedId={
-                        sourcePicked &&
-                        recommendedAdapters.some((opt) => opt.type === adapterType)
-                          ? adapterType
-                          : null
+                        !sourceSelected
+                          ? null
+                          : databricksSource
+                            ? DATABRICKS_SOURCE_ID
+                            : adapterType
                       }
                       collapsed={connectCollapsed}
                       settling={connectPhase === "unwindRow"}
@@ -2690,9 +2818,20 @@ function OnboardingWizardInner({
                         if (connectPhase !== "idle") return;
                         autoConnectStartedRef.current = false;
                         setSourcePicked(true);
+                        if (id === DATABRICKS_SOURCE_ID) {
+                          // Another source's model is never a combo.
+                          if (!databricksSource) setModel("");
+                          setDatabricksSource(true);
+                          setAdapterType(DATABRICKS_SOURCE_ADAPTER_TYPE);
+                          setConnectPhase("collapsing");
+                          return;
+                        }
+                        const leavingDatabricks = databricksSource;
+                        setDatabricksSource(false);
                         setAdapterType(id);
                         if (id === "opencode_local") setModel(DEFAULT_OPENCODE_LOCAL_MODEL);
-                        else if (id !== "codex_local") setModel("");
+                        // A combo is not an OpenAI model either.
+                        else if (id !== "codex_local" || leavingDatabricks) setModel("");
                         setConnectPhase("collapsing");
                       }}
                     />
@@ -2768,6 +2907,16 @@ function OnboardingWizardInner({
                         <Loader2 className="size-4 animate-spin" />
                         {connectProgress}
                       </p>
+                    ) : databricksSource && createdCompanyId ? (
+                      <DatabricksSourceCard
+                        companyId={createdCompanyId}
+                        connection={databricksConnection}
+                        onConnectionChange={setDatabricksConnection}
+                        model={model}
+                        onModelChange={setModel}
+                        disabled={loading || adapterEnvLoading}
+                        onCancel={() => unwindConnectStep()}
+                      />
                     ) : credentialMode === "api" ? (
                       <OnboardingLoginCard
                         instruction={savedKeys.options.length ? "Choose a saved API key or enter a new one" : `Provide your ${

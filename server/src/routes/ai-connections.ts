@@ -37,6 +37,7 @@ import {
   DatabricksDiscoveryError,
   type DatabricksModelServiceCredential,
 } from "../services/databricks-model-services.js";
+import type { DatabricksOAuthRequestContext } from "../services/databricks-oauth.js";
 
 /** Agent API calls inherit authenticated run identity, never the agent's own ID. */
 export function responsibleUserForAiRequest(req: Request): string | null {
@@ -211,15 +212,20 @@ function assertDatabricksHostAllowed(
  * `DatabricksDiscoveryError` to the same `unprocessable(...)` error style the generic
  * provider path above uses; never lets a raw `DatabricksDiscoveryError` escape
  * uncaught, and never surfaces the client secret, the issued access token, or a
- * provider response body (all guarantees already hold in the underlying error). */
-async function validateDatabricksOAuthCredential(input: {
-  clientId: string;
-  clientSecret: string;
-  workspaceHost?: string;
-  catalog?: string;
-  schema?: string;
-  modelPrefix?: string;
-}) {
+ * provider response body (all guarantees already hold in the underlying error).
+ * `context` only correlates the OAuth token exchange with this request's own log
+ * line — it never changes what is validated or thrown. */
+async function validateDatabricksOAuthCredential(
+  input: {
+    clientId: string;
+    clientSecret: string;
+    workspaceHost?: string;
+    catalog?: string;
+    schema?: string;
+    modelPrefix?: string;
+  },
+  context?: DatabricksOAuthRequestContext,
+) {
   const credential: DatabricksModelServiceCredential = {
     host: input.workspaceHost!,
     clientId: input.clientId,
@@ -229,17 +235,21 @@ async function validateDatabricksOAuthCredential(input: {
     modelPrefix: input.modelPrefix,
   };
   try {
-    await validateDatabricksCredential(credential);
+    await validateDatabricksCredential(credential, context);
   } catch (error) {
     if (!(error instanceof DatabricksDiscoveryError)) throw error;
     if (error.kind === "invalid_host")
       throw unprocessable("The Databricks workspace host is invalid.");
     if (error.kind === "invalid_credential")
       throw unprocessable("Databricks rejected these Client ID / Client secret credentials.");
+    if (error.kind === "scope_rejected")
+      throw unprocessable("Databricks rejected the OAuth scope requested for these credentials.");
     if (error.kind === "insufficient_permission")
       throw unprocessable(
         "These Databricks credentials lack permission for the selected catalog and schema.",
       );
+    if (error.kind === "upstream_rejected")
+      throw unprocessable("Databricks rejected the request with an unexpected response. Try again.");
     throw unprocessable("Databricks could not verify these credentials. Try again.");
   }
 }
@@ -247,9 +257,12 @@ async function validateDatabricksOAuthCredential(input: {
 /** Maps a `DatabricksDiscoveryError` raised anywhere in the discovery-session flow
  * (create, catalogs, schemas, model-services) to a classified HTTP error carrying
  * `{ code, stage, retryable }` (and `retryAfterSeconds` when Databricks sent
- * `Retry-After`) — see doc section 6. Never lets a raw `DatabricksDiscoveryError`
- * escape uncaught, and never surfaces a client secret, access token, or upstream
- * response body. */
+ * `Retry-After`) — see doc section 6. `error.retryable`, when the thrower set it
+ * explicitly (e.g. a DNS/TLS cause that will not resolve by retrying, or an
+ * unrecognized non-2xx response), overrides the kind's usual default — this
+ * function never hardcodes every "unavailable"/"upstream_rejected" as
+ * retryable. Never lets a raw `DatabricksDiscoveryError` escape uncaught, and
+ * never surfaces a client secret, access token, or upstream response body. */
 function mapDatabricksDiscoveryError(
   error: DatabricksDiscoveryError,
   stage: DatabricksDiscoveryStage,
@@ -262,6 +275,8 @@ function mapDatabricksDiscoveryError(
       stage,
       retryable: false,
     });
+  if (error.kind === "scope_rejected")
+    throw unprocessable(error.message, { code: "DATABRICKS_SCOPE_REJECTED", stage, retryable: false });
   if (error.kind === "insufficient_permission")
     throw unprocessable(error.message, { code: "DATABRICKS_ACCESS_DENIED", stage, retryable: false });
   if (error.kind === "rate_limited")
@@ -271,7 +286,9 @@ function mapDatabricksDiscoveryError(
       retryable: true,
       retryAfterSeconds: error.retryAfterSeconds,
     });
-  throw unprocessable(error.message, { code: "DATABRICKS_UPSTREAM_ERROR", stage, retryable: true });
+  if (error.kind === "upstream_rejected")
+    throw unprocessable(error.message, { code: "DATABRICKS_UPSTREAM_ERROR", stage, retryable: error.retryable ?? false });
+  throw unprocessable(error.message, { code: "DATABRICKS_UPSTREAM_ERROR", stage, retryable: error.retryable ?? true });
 }
 
 /** Options for `aiConnectionRoutes`. Extends the local-AI-login policy options with the
@@ -323,7 +340,7 @@ export function aiConnectionRoutes(db: Db, options: AiConnectionRouteOptions = {
       assertDatabricksHostAllowed(input.workspaceHost, options);
       try {
         res.setHeader("Cache-Control", "no-store");
-        res.status(201).json(await discoverySessions.create(companyId, userId, input));
+        res.status(201).json(await discoverySessions.create(companyId, userId, input, { requestId: String(req.id) }));
       } catch (error) {
         if (error instanceof DatabricksDiscoveryError) mapDatabricksDiscoveryError(error, "oauth");
         throw error;
@@ -509,14 +526,17 @@ export function aiConnectionRoutes(db: Db, options: AiConnectionRouteOptions = {
           ? await discoverySessions.resolveForSave(companyId, userId, input.discoverySessionId)
           : { workspaceHost: input.workspaceHost!, clientId: input.clientId!, clientSecret: input.clientSecret! };
         assertDatabricksHostAllowed(resolved.workspaceHost, options);
-        await validateDatabricksOAuthCredential({
-          clientId: resolved.clientId,
-          clientSecret: resolved.clientSecret,
-          workspaceHost: resolved.workspaceHost,
-          catalog: input.catalog,
-          schema: input.schema,
-          modelPrefix: input.modelPrefix,
-        });
+        await validateDatabricksOAuthCredential(
+          {
+            clientId: resolved.clientId,
+            clientSecret: resolved.clientSecret,
+            workspaceHost: resolved.workspaceHost,
+            catalog: input.catalog,
+            schema: input.schema,
+            modelPrefix: input.modelPrefix,
+          },
+          { requestId: String(req.id), credentialSource: "request" },
+        );
         const result = await service.save(
           companyId,
           userId,

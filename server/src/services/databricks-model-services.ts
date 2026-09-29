@@ -2,6 +2,7 @@ import type { AdapterModel } from "@paperclipai/adapter-utils";
 import {
   fetchDatabricksAccessToken,
   resolveDatabricksAccessToken,
+  type DatabricksOAuthRequestContext,
 } from "./databricks-oauth.js";
 
 /**
@@ -49,10 +50,12 @@ export interface DatabricksDiscoveryKey {
 }
 
 export type DatabricksDiscoveryErrorKind =
-  | "invalid_credential" // 401
+  | "invalid_credential" // 401, or an explicit OAuth `invalid_client`
   | "insufficient_permission" // 403
+  | "scope_rejected" // OAuth `invalid_scope` — never widened automatically
   | "rate_limited" // 429, carries retryAfterSeconds
-  | "unavailable" // 5xx / network / timeout
+  | "upstream_rejected" // any other non-2xx status Databricks returned that isn't one of the above
+  | "unavailable" // 5xx / network / timeout / an unparseable successful response
   | "invalid_host"; // fails https/origin validation
 
 /**
@@ -60,12 +63,20 @@ export type DatabricksDiscoveryErrorKind =
  * fixed, generic string per `kind` — it never interpolates response bodies,
  * headers, or the credential, so the token can never leak into a thrown
  * error message.
+ *
+ * `retryable` is an explicit, per-instance override of the kind's usual
+ * default (see `databricks-oauth.ts`'s network-error classification): most
+ * `kind`s have one obvious retry policy, but "unavailable" covers both a
+ * transient 5xx/timeout (retryable) and a persistent DNS/TLS misconfiguration
+ * (not retryable), so the thrower — which has the concrete cause — decides.
+ * When omitted, the caller falls back to the kind's usual default.
  */
 export class DatabricksDiscoveryError extends Error {
   constructor(
     readonly kind: DatabricksDiscoveryErrorKind,
     message: string,
     readonly retryAfterSeconds?: number,
+    readonly retryable?: boolean,
   ) {
     super(message);
     this.name = "DatabricksDiscoveryError";
@@ -231,14 +242,20 @@ async function fetchAllPages(
  * `credentialVersion` exists to key a cache entry by — so the token exchange
  * runs uncached via `fetchDatabricksAccessToken`. Throws
  * `DatabricksDiscoveryError` on any failure (`invalid_credential`,
- * `insufficient_permission`, `rate_limited`, `unavailable`, `invalid_host`);
- * never leaks the client secret, the issued token, or the response body.
+ * `scope_rejected`, `insufficient_permission`, `rate_limited`,
+ * `upstream_rejected`, `unavailable`, `invalid_host`); never leaks the client
+ * secret, the issued token, or the response body.
+ *
+ * `context`, when supplied, only reaches the OAuth token exchange (not the
+ * Unity Catalog page fetch below it) — it exists purely so a caller can
+ * correlate an `oauth`-stage failure here with its own request log line.
  */
 export async function validateDatabricksCredential(
   credential: DatabricksModelServiceCredential,
+  context?: DatabricksOAuthRequestContext,
 ): Promise<void> {
   assertValidHost(credential.host);
-  const { token } = await fetchDatabricksAccessToken(credential);
+  const { token } = await fetchDatabricksAccessToken(credential, context);
   await fetchPage(credential, token, undefined);
 }
 

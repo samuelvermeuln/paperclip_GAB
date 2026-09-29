@@ -10,7 +10,7 @@ import type {
 import type { AdapterModel } from "@paperclipai/adapter-utils";
 import { gone, notFound } from "../errors.js";
 import { localEncryptedProvider } from "../secrets/local-encrypted-provider.js";
-import { fetchDatabricksAccessToken } from "./databricks-oauth.js";
+import { fetchDatabricksAccessToken, logDatabricksOAuthDiscoverySessionFailure } from "./databricks-oauth.js";
 import {
   DatabricksDiscoveryError,
   invalidateDatabricksModelServiceCache,
@@ -72,32 +72,53 @@ export function databricksDiscoverySessionService(db: Db) {
    * on failure, before anything is persisted), then stores the draft with the
    * client secret encrypted at rest. Never returns the secret or the issued
    * access token.
+   *
+   * `context.requestId`, when supplied, correlates both the OAuth attempt and
+   * a post-token failure here (encrypting the secret, persisting the draft)
+   * with this HTTP request's own log line — see
+   * `paperclip-diagnostico-oauth-databricks.md`.
    */
   async function create(
     companyId: string,
     userId: string,
     input: { workspaceHost: string; clientId: string; clientSecret: string },
+    context: { requestId?: string } = {},
   ): Promise<DatabricksDiscoverySessionStarted> {
-    await fetchDatabricksAccessToken({
-      host: input.workspaceHost,
-      clientId: input.clientId,
-      clientSecret: input.clientSecret,
-    });
-    const prepared = await localEncryptedProvider.createSecret({ value: input.clientSecret });
-    const id = randomUUID();
-    const expiresAt = new Date(Date.now() + resolveTtlMs());
-    await reapExpired();
-    await db.insert(databricksDiscoverySessions).values({
-      id,
-      companyId,
-      createdByUserId: userId,
-      workspaceHost: input.workspaceHost,
-      clientId: input.clientId,
-      clientSecretMaterial: prepared.material,
-      credentialVersion: randomUUID(),
-      expiresAt,
-    });
-    return { discoverySessionId: id, expiresAt: expiresAt.toISOString(), authStatus: "authenticated" };
+    await fetchDatabricksAccessToken(
+      { host: input.workspaceHost, clientId: input.clientId, clientSecret: input.clientSecret },
+      { requestId: context.requestId, credentialSource: "request" },
+    );
+    // The OAuth exchange above already succeeded — a failure past this point
+    // is never a Databricks upstream problem, so it is logged at its own
+    // `discovery_session` stage rather than folded into the OAuth failure the
+    // caller might otherwise assume happened.
+    const startedAt = Date.now();
+    try {
+      const prepared = await localEncryptedProvider.createSecret({ value: input.clientSecret });
+      const id = randomUUID();
+      const expiresAt = new Date(Date.now() + resolveTtlMs());
+      await reapExpired();
+      await db.insert(databricksDiscoverySessions).values({
+        id,
+        companyId,
+        createdByUserId: userId,
+        workspaceHost: input.workspaceHost,
+        clientId: input.clientId,
+        clientSecretMaterial: prepared.material,
+        credentialVersion: randomUUID(),
+        expiresAt,
+      });
+      return { discoverySessionId: id, expiresAt: expiresAt.toISOString(), authStatus: "authenticated" };
+    } catch (error) {
+      logDatabricksOAuthDiscoverySessionFailure({
+        requestId: context.requestId,
+        workspaceHost: input.workspaceHost,
+        credentialSource: "request",
+        durationMs: Date.now() - startedAt,
+        causeCode: error instanceof Error ? error.name : undefined,
+      });
+      throw error;
+    }
   }
 
   /** Loads a draft, enforcing company + creator ownership and TTL. A missing

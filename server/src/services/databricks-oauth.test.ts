@@ -436,6 +436,214 @@ describe("no secret in observable surfaces (Property 3)", () => {
   });
 });
 
+describe("fetchDatabricksAccessToken — request shape (paperclip-diagnostico-oauth-databricks)", () => {
+  it("sends scope=unity-catalog alongside grant_type=client_credentials", async () => {
+    const fetch = vi.fn().mockImplementation(async () => tokenResponse(ACCESS_TOKEN, 3600));
+    vi.stubGlobal("fetch", fetch);
+
+    const { fetchDatabricksAccessToken } = await import("./databricks-oauth.js");
+    await fetchDatabricksAccessToken(credential());
+
+    const init = fetch.mock.calls[0]![1] as RequestInit;
+    const params = new URLSearchParams(String(init.body));
+    expect(params.get("grant_type")).toBe("client_credentials");
+    expect(params.get("scope")).toBe("unity-catalog");
+  });
+});
+
+describe("fetchDatabricksAccessToken — OAuth 2.0 error-body classification", () => {
+  it("classifies an explicit invalid_client body as invalid_credential, not retryable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(400, { error: "invalid_client", error_description: "bad client" })),
+    );
+    const { fetchDatabricksAccessToken } = await import("./databricks-oauth.js");
+    await expect(fetchDatabricksAccessToken(credential())).rejects.toMatchObject({
+      kind: "invalid_credential",
+      retryable: false,
+    });
+  });
+
+  it("classifies an explicit invalid_scope body as scope_rejected, not retryable, and never widens the scope automatically", async () => {
+    const fetch = vi.fn().mockResolvedValue(jsonResponse(400, { error: "invalid_scope" }));
+    vi.stubGlobal("fetch", fetch);
+    const { fetchDatabricksAccessToken } = await import("./databricks-oauth.js");
+    await expect(fetchDatabricksAccessToken(credential())).rejects.toMatchObject({
+      kind: "scope_rejected",
+      retryable: false,
+    });
+    // A single attempt only — this module never retries with a broader scope on its own.
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies an unrecognized 400 (no known OAuth error code) as upstream_rejected, not retryable — never assumes the credential is wrong", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(400, { error: "invalid_request" })));
+    const { fetchDatabricksAccessToken } = await import("./databricks-oauth.js");
+    await expect(fetchDatabricksAccessToken(credential())).rejects.toMatchObject({
+      kind: "upstream_rejected",
+      retryable: false,
+    });
+  });
+
+  it("classifies a 400 with a non-JSON body as upstream_rejected without reading its content into the thrown error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<html>Bad Request</html>", { status: 400 })));
+    const { fetchDatabricksAccessToken } = await import("./databricks-oauth.js");
+    const error = await fetchDatabricksAccessToken(credential()).catch((e: unknown) => e);
+    expect(error).toMatchObject({ kind: "upstream_rejected", retryable: false });
+    expect((error as Error).message).not.toContain("<html>");
+  });
+});
+
+describe("fetchDatabricksAccessToken — network-cause-aware retryable classification", () => {
+  it("classifies a DNS resolution failure (ENOTFOUND) as unavailable but NOT retryable", async () => {
+    const dnsError = new TypeError("fetch failed");
+    (dnsError as unknown as { cause: unknown }).cause = Object.assign(new Error("getaddrinfo ENOTFOUND acme.cloud.databricks.com"), { code: "ENOTFOUND" });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(dnsError));
+    const { fetchDatabricksAccessToken } = await import("./databricks-oauth.js");
+    await expect(fetchDatabricksAccessToken(credential())).rejects.toMatchObject({
+      kind: "unavailable",
+      retryable: false,
+    });
+  });
+
+  it("classifies a connection reset (ECONNRESET) as unavailable and retryable", async () => {
+    const connError = new TypeError("fetch failed");
+    (connError as unknown as { cause: unknown }).cause = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(connError));
+    const { fetchDatabricksAccessToken } = await import("./databricks-oauth.js");
+    await expect(fetchDatabricksAccessToken(credential())).rejects.toMatchObject({
+      kind: "unavailable",
+      retryable: true,
+    });
+  });
+
+  it("classifies a TLS certificate failure as unavailable but NOT retryable", async () => {
+    const tlsError = new TypeError("fetch failed");
+    (tlsError as unknown as { cause: unknown }).cause = Object.assign(new Error("certificate has expired"), { code: "CERT_HAS_EXPIRED" });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(tlsError));
+    const { fetchDatabricksAccessToken } = await import("./databricks-oauth.js");
+    await expect(fetchDatabricksAccessToken(credential())).rejects.toMatchObject({
+      kind: "unavailable",
+      retryable: false,
+    });
+  });
+});
+
+describe("fetchDatabricksAccessToken — structured diagnostics (databricks.oauth.failed / .succeeded)", () => {
+  it("logs one databricks.oauth.failed event per failure, correlated by requestId, with the allowlisted fields only", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(403, { error: "access_denied" })));
+    const { logger } = await import("../middleware/logger.js");
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => logger as never);
+    const { fetchDatabricksAccessToken } = await import("./databricks-oauth.js");
+
+    await expect(
+      fetchDatabricksAccessToken(credential(), { requestId: "req-abc-123", credentialSource: "request" }),
+    ).rejects.toMatchObject({ kind: "insufficient_permission" });
+
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const [payload] = warnSpy.mock.calls[0]!;
+    expect(payload).toMatchObject({
+      event: "databricks.oauth.failed",
+      requestId: "req-abc-123",
+      stage: "oauth_response",
+      workspaceHost: "https://acme.cloud.databricks.com",
+      endpointPath: "/oidc/v1/token",
+      method: "POST",
+      scope: "unity-catalog",
+      credentialSource: "request",
+      upstreamStatus: 403,
+      retryable: false,
+    });
+    expect(typeof (payload as Record<string, unknown>).durationMs).toBe("number");
+    // Never the credential, never the response body verbatim.
+    expect(JSON.stringify(payload)).not.toContain(CLIENT_SECRET);
+    expect(JSON.stringify(payload)).not.toContain(ACCESS_TOKEN);
+  });
+
+  it("logs upstreamStatus: null and a networkCode when the request never reached Databricks", async () => {
+    const dnsError = new TypeError("fetch failed");
+    (dnsError as unknown as { cause: unknown }).cause = Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(dnsError));
+    const { logger } = await import("../middleware/logger.js");
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => logger as never);
+    const { fetchDatabricksAccessToken } = await import("./databricks-oauth.js");
+
+    await expect(fetchDatabricksAccessToken(credential())).rejects.toMatchObject({ kind: "unavailable" });
+
+    const [payload] = warnSpy.mock.calls[0]! as [Record<string, unknown>];
+    expect(payload.stage).toBe("oauth_request");
+    expect(payload.upstreamStatus).toBeNull();
+    expect(payload.networkCode).toBe("ENOTFOUND");
+    expect(payload.retryable).toBe(false);
+  });
+
+  it("distinguishes discovery_session-stage post-token failures via a caller-supplied stage when re-logged", async () => {
+    // The token exchange itself succeeds here; a failure *after* it (e.g.
+    // persisting the draft) is this module's caller's responsibility to log
+    // at stage discovery_session — this module only ever logs its own
+    // oauth_request/oauth_response/oauth_parse stages.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(tokenResponse(ACCESS_TOKEN, 3600)));
+    const { logger } = await import("../middleware/logger.js");
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => logger as never);
+    const infoSpy = vi.spyOn(logger, "info").mockImplementation(() => logger as never);
+    const { fetchDatabricksAccessToken } = await import("./databricks-oauth.js");
+
+    await fetchDatabricksAccessToken(credential());
+
+    expect(warnSpy).not.toHaveBeenCalled();
+    expect(infoSpy).toHaveBeenCalledTimes(1);
+    const [payload] = infoSpy.mock.calls[0]! as [Record<string, unknown>];
+    expect(payload).toMatchObject({ event: "databricks.oauth.succeeded", upstreamStatus: 200, hasToken: true });
+    // The success event never includes the token value, only its presence.
+    expect(JSON.stringify(payload)).not.toContain(ACCESS_TOKEN);
+    expect(payload).not.toHaveProperty("token");
+  });
+
+  it("sanitizes error_description: redacts an echoed clientSecret, strips newlines, and caps length at 500", async () => {
+    // Built from repeated short words (not one long unbroken run) so it tests
+    // the 500-char cap without also tripping the "still looks like a token"
+    // omission safety net covered by the next test.
+    const longFiller = "padding word ".repeat(60);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(403, {
+          error: "access_denied",
+          error_description: `denied for ${CLIENT_SECRET}\nline two ${longFiller}`,
+        }),
+      ),
+    );
+    const { logger } = await import("../middleware/logger.js");
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => logger as never);
+    const { fetchDatabricksAccessToken } = await import("./databricks-oauth.js");
+
+    await expect(fetchDatabricksAccessToken(credential())).rejects.toBeInstanceOf(Error);
+
+    const [payload] = warnSpy.mock.calls[0]! as [Record<string, unknown>];
+    const description = payload.upstreamErrorDescription as string | undefined;
+    expect(description).toBeDefined();
+    expect(description).not.toContain(CLIENT_SECRET);
+    expect(description).not.toContain("\n");
+    expect(description!.length).toBeLessThanOrEqual(501); // 500 + the truncation ellipsis
+  });
+
+  it("omits error_description entirely when a long opaque token-shaped run survives redaction", async () => {
+    const opaqueBlob = "a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0u1V2w3X4".slice(0, 40);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(403, { error: "access_denied", error_description: `token=${opaqueBlob}` })),
+    );
+    const { logger } = await import("../middleware/logger.js");
+    const warnSpy = vi.spyOn(logger, "warn").mockImplementation(() => logger as never);
+    const { fetchDatabricksAccessToken } = await import("./databricks-oauth.js");
+
+    await expect(fetchDatabricksAccessToken(credential())).rejects.toBeInstanceOf(Error);
+
+    const [payload] = warnSpy.mock.calls[0]! as [Record<string, unknown>];
+    expect(payload.upstreamErrorDescription).toBeUndefined();
+  });
+});
+
 describe("resolveDatabricksAccessToken — never serves an expired/near-expiry token (Property 4)", () => {
   // **Validates: Requirements 4.7**
   //
